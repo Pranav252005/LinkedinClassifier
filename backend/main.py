@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import hmac
 import io
@@ -801,16 +802,37 @@ async def admin_stats(days: int = 30, user: sqlite3.Row = Depends(_operator)) ->
     return {"since": since, "costs": costs, "quality": evaluation.feedback_report()}
 
 
+_poll_task: asyncio.Task | None = None
+
+
 @app.post("/api/admin/poll")
-async def admin_poll(request: Request, limit: int | None = None) -> dict:
-    """Run the daily poll now. Authenticated by POLL_TOKEN (for an external cron),
-    or by an operator session."""
+async def admin_poll(request: Request, limit: int | None = None, wait: bool = False) -> dict:
+    """Run the daily poll. Authenticated by POLL_TOKEN (for an external cron),
+    or by an operator session.
+
+    Returns at once and polls in the background: external crons such as
+    cron-job.org give up after ~30 s, and a poll over many boards takes longer.
+    Pass ?wait=true to block and get the stats back.
+    """
+    global _poll_task
     token = request.headers.get("x-poll-token", "")
     if not (POLL_TOKEN and hmac.compare_digest(token, POLL_TOKEN)):
         user = auth._user_from_token(request.cookies.get(SESSION_COOKIE))
         if user is None or not is_comp_account(user["email"]):
             raise HTTPException(status_code=403, detail="Operator only.")
-    return await poller.run(limit)
+    if wait:
+        return await poller.run(limit)
+    if _poll_task is not None and not _poll_task.done():
+        return {"started": False, "reason": "a poll is already running"}
+
+    async def _run() -> None:
+        try:
+            log.info("poll finished: %s", await poller.run(limit))
+        except Exception:
+            log.exception("poll failed")
+
+    _poll_task = asyncio.create_task(_run())
+    return {"started": True}
 
 
 @app.get("/api/health")

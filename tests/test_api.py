@@ -161,3 +161,19 @@ def test_operator_endpoints(client):
     r = client.get("/api/admin/stats")
     assert r.status_code == 200 and "quality" in r.json()
     assert client.get("/api/company-timing", params={"company": "Stripe"}).json()["enough"] is False
+
+
+def test_poll_endpoint_token(client, monkeypatch):
+    import main as app_main
+    calls = []
+
+    async def fake_run(limit=None):
+        calls.append(limit)
+        return {"poll": {}, "alerts": {}}
+    monkeypatch.setattr(app_main.poller, "run", fake_run)
+    monkeypatch.setattr(app_main, "POLL_TOKEN", "s3cret")
+    assert client.post("/api/admin/poll", headers={"X-Poll-Token": "wrong"}).status_code == 403
+    r = client.post("/api/admin/poll", headers={"X-Poll-Token": "s3cret"})
+    assert r.json() == {"started": True}
+    r = client.post("/api/admin/poll?wait=true", headers={"X-Poll-Token": "s3cret"})
+    assert r.json() == {"poll": {}, "alerts": {}}
