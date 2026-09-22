@@ -76,6 +76,18 @@ CREATE TABLE IF NOT EXISTS opening_sightings (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sightings_company ON opening_sightings(company, first_seen);
+
+CREATE TABLE IF NOT EXISTS user_seen (
+    user_id     INTEGER    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind        TEXT    NOT NULL,
+    url         TEXT    NOT NULL,
+    first_seen  TEXT    NOT NULL,
+    last_seen   TEXT    NOT NULL,
+    times_seen  INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (user_id, kind, url)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_seen_lookup ON user_seen(user_id, kind, last_seen);
 """
 
 _POSTGRES_SCHEMA = """
@@ -112,6 +124,18 @@ CREATE TABLE IF NOT EXISTS opening_sightings (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sightings_company ON opening_sightings(company, first_seen);
+
+CREATE TABLE IF NOT EXISTS user_seen (
+    user_id     BIGINT     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind        TEXT    NOT NULL,
+    url         TEXT    NOT NULL,
+    first_seen  TEXT    NOT NULL,
+    last_seen   TEXT    NOT NULL,
+    times_seen  INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (user_id, kind, url)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_seen_lookup ON user_seen(user_id, kind, last_seen);
 """
 
 
@@ -341,3 +365,57 @@ def sightings_count() -> int:
     with connect() as conn:
         row = _fetchone(conn, "SELECT COUNT(*) AS n FROM opening_sightings", ())
         return int(row["n"]) if row else 0
+
+
+# --- what a user has already been shown --------------------------------------
+# Repeat runs used to return the same faces: the queries are identical, so
+# Google returns the same top results forever. Remembering per user what has
+# already been shown lets a later run skip it and dig deeper instead.
+
+_UPSERT_SEEN = """
+INSERT INTO user_seen (user_id, kind, url, first_seen, last_seen, times_seen)
+VALUES (?, ?, ?, ?, ?, 1)
+ON CONFLICT (user_id, kind, url) DO UPDATE SET
+    last_seen  = excluded.last_seen,
+    times_seen = user_seen.times_seen + 1
+"""
+
+
+def record_seen(user_id: int, kind: str, urls: list[str]) -> None:
+    """Remember that this user has now been shown these results."""
+    if not urls:
+        return
+    now = _now()
+    rows = [(user_id, kind, u, now, now) for u in dict.fromkeys(urls)]
+    with connect() as conn:
+        if IS_POSTGRES:
+            with conn.cursor() as cur:
+                cur.executemany(_q(_UPSERT_SEEN), rows)
+        else:
+            conn.executemany(_UPSERT_SEEN, rows)
+
+
+def seen_urls(user_id: int, kind: str, limit: int = 5000) -> set[str]:
+    """URLs this user has already been shown, most recent first.
+
+    Capped because it is sent into every query filter; a user far past the cap
+    simply starts seeing the oldest results again, which beats an unbounded
+    query.
+    """
+    sql = ("SELECT url FROM user_seen WHERE user_id = ? AND kind = ? "
+           "ORDER BY last_seen DESC LIMIT ?")
+    with connect() as conn:
+        if IS_POSTGRES:
+            with conn.cursor() as cur:
+                cur.execute(_q(sql), (user_id, kind, limit))
+                return {r["url"] for r in cur.fetchall()}
+        return {r["url"] for r in conn.execute(sql, (user_id, kind, limit)).fetchall()}
+
+
+def forget_seen(user_id: int, kind: str | None = None) -> int:
+    """Clear the 'already shown' memory so everything is fresh again."""
+    with connect() as conn:
+        if kind:
+            return _run(conn, "DELETE FROM user_seen WHERE user_id = ? AND kind = ?",
+                        (user_id, kind))
+        return _run(conn, "DELETE FROM user_seen WHERE user_id = ?", (user_id,))

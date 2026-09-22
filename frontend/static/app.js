@@ -160,7 +160,7 @@ function renderOpenings(data) {
     return;
   }
 
-  const cards = data.results.map((r) => {
+  const cards = data.results.map((r, i) => {
     const cls = scoreClass(r.fit_score);
     const when = r.posted_at ? `<span class="badge">posted ${esc(r.posted_at)}</span>` : '';
     const close = r.closes_at ? `<span class="badge">closes ${esc(r.closes_at)}</span>` : '';
@@ -189,7 +189,10 @@ function renderOpenings(data) {
           ${when}${close}${seen}
           ${r.priority ? `<span class="badge">${esc(r.priority)}</span>` : ''}
         </div>
-        <a class="apply" href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">Open application →</a>
+        <span class="foot-actions">
+          <button type="button" class="btn ghost approach" data-i="${i}">How to approach</button>
+          <a class="apply" href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">Open application →</a>
+        </span>
       </div>
     </article>`;
   }).join('');
@@ -210,6 +213,7 @@ function renderOpenings(data) {
     <div class="openings">${cards}</div>
     <details><summary>${(data.queries_run || []).length} searches run</summary><div>${queries}</div></details>`;
   $('csv').addEventListener('click', downloadCsv);
+  bindApproach();
 }
 
 function render(data) {
@@ -223,7 +227,7 @@ function render(data) {
     return;
   }
 
-  const rows = data.results.map((r) => {
+  const rows = data.results.map((r, i) => {
     const cls = scoreClass(r.fit_score);
     const prob = r.plausible_contact == null ? '—' : `${Math.round(r.plausible_contact * 100)}%`;
     const pri = r.priority ? `<span class="pri-${esc(r.priority)}">${esc(r.priority)}</span>` : '—';
@@ -239,7 +243,9 @@ function render(data) {
         </div>` : ''}
         ${err}
       </div>
-      <div class="meta">${esc(r.company_query)}<br>plausible ${prob} · ${pri}</div>
+      <div class="meta">${esc(r.company_query)}<br>plausible ${prob} · ${pri}
+        <button type="button" class="btn ghost approach" data-i="${i}">How to approach</button>
+      </div>
     </div>`;
   }).join('');
 
@@ -260,6 +266,7 @@ function render(data) {
     <details><summary>${(data.queries_run || []).length} search queries run</summary><div>${queries}</div></details>`;
 
   $('csv').addEventListener('click', downloadCsv);
+  bindApproach();
 }
 
 function downloadCsv() {
@@ -294,6 +301,158 @@ function downloadCsv() {
   a.click();
   URL.revokeObjectURL(a.href);
 }
+
+/* ---------- how to approach ---------- */
+// A ranked list says who to talk to, not what to say. This drafts it for one
+// result at a time, on click -- drafting all forty up front would spend the
+// model budget on cards nobody opens.
+
+function drawer() {
+  let el = $('drawer');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'drawer';
+    el.className = 'drawer';
+    el.hidden = true;
+    el.addEventListener('click', (e) => { if (e.target === el) closeDrawer(); });
+    document.body.appendChild(el);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
+  }
+  return el;
+}
+
+function closeDrawer() {
+  const el = $('drawer');
+  if (el) el.hidden = true;
+}
+
+function copyBlock(label, text) {
+  if (!text) return '';
+  return `<div class="draft-block">
+    <div class="draft-label">${esc(label)}
+      <button type="button" class="btn ghost copy" data-copy="${esc(text)}">Copy</button>
+    </div>
+    <pre>${esc(text)}</pre>
+  </div>`;
+}
+
+function paintDraft(target, draft) {
+  const who = target.name || target.title || 'this result';
+  const points = (draft.talking_points || [])
+    .map((p) => `<li>${esc(p)}</li>`).join('');
+  drawer().innerHTML = `<div class="drawer-panel" role="dialog" aria-modal="true">
+    <div class="drawer-head">
+      <div>
+        <h3>How to approach ${esc(who)}</h3>
+        ${draft.headline ? `<p class="draft-angle">${esc(draft.headline)}</p>` : ''}
+      </div>
+      <button type="button" class="btn ghost" id="drawerClose">Close</button>
+    </div>
+    ${copyBlock('Connection note (fits LinkedIn’s 280 characters)', draft.connection_note)}
+    ${copyBlock('Message', draft.message)}
+    ${points ? `<div class="draft-block"><div class="draft-label">Talk about</div><ul>${points}</ul></div>` : ''}
+    ${draft.gap ? `<div class="draft-block"><div class="draft-label">The objection to expect</div><p>${esc(draft.gap)}</p></div>` : ''}
+    <p class="draft-foot">Drafted from your resume and this result only. Read it before you send it.</p>
+  </div>`;
+  drawer().hidden = false;
+  $('drawerClose').addEventListener('click', closeDrawer);
+  drawer().querySelectorAll('.copy').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(btn.dataset.copy);
+        btn.textContent = 'Copied';
+        setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+      } catch {
+        btn.textContent = 'Copy failed';
+      }
+    });
+  });
+}
+
+function bindApproach() {
+  document.querySelectorAll('.approach').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const r = (lastRun && lastRun.results || [])[Number(btn.dataset.i)];
+      if (!r) return;
+      const original = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Drafting…';
+      drawer().innerHTML = '<div class="drawer-panel"><p>Drafting…</p></div>';
+      drawer().hidden = false;
+      try {
+        const draft = await api('/api/approach', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            kind: mode === 'jobs' ? 'opening' : 'person',
+            resume: $('resume').value.trim(),
+            role_target: $('role').value,
+            name: r.name || '',
+            headline: r.headline || '',
+            title: r.title || '',
+            company: r.company || r.company_query || '',
+            snippet: r.snippet || '',
+            posted_at: r.posted_at || '',
+            url: r.url || r.linkedin_url || '',
+          }),
+        });
+        paintDraft(r, draft);
+      } catch (err) {
+        drawer().innerHTML = `<div class="drawer-panel">
+          <div class="drawer-head"><h3>Could not draft that</h3>
+          <button type="button" class="btn ghost" id="drawerClose">Close</button></div>
+          <div class="note bad">${esc(err.message)}</div></div>`;
+        $('drawerClose').addEventListener('click', closeDrawer);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    });
+  });
+}
+
+/* ---------- mode ---------- */
+// Both of these were referenced (paintMode on load, MODE_COPY after every run)
+// but never defined, so the toggle did nothing, the ReferenceError on load also
+// killed loadAccount(), and the run button stayed stuck on "Running…".
+const MODE_COPY = {
+  jobs: {
+    go: 'Find openings',
+    note: 'Finds live postings on company job boards — each one opens straight onto an application form.',
+    titles: 'Roles',
+    titlesHint: 'software engineer intern',
+  },
+  people: {
+    go: 'Find people',
+    note: 'Finds people who can refer or screen you — recruiters, hiring managers, engineers on the team.',
+    titles: 'Titles to contact',
+    titlesHint: 'university recruiter',
+  },
+};
+
+function paintMode() {
+  const copy = MODE_COPY[mode];
+  document.querySelectorAll('.mode').forEach((btn) => {
+    const on = btn.dataset.mode === mode;
+    btn.classList.toggle('on', on);
+    btn.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  $('modeNote').textContent = copy.note;
+  $('go').textContent = copy.go;
+  $('titlesLabel').innerHTML = `${esc(copy.titles)} <span class="opt">optional</span>`;
+  $('titles').placeholder = copy.titlesHint;
+  // Results from the other mode would be rendered by the wrong renderer.
+  $('out').innerHTML = '';
+  lastRun = null;
+}
+
+document.querySelectorAll('.mode').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    if (btn.dataset.mode === mode) return;
+    mode = btn.dataset.mode;
+    paintMode();
+  });
+});
 
 /* ---------- run ---------- */
 $('form').addEventListener('submit', async (e) => {
@@ -334,6 +493,7 @@ $('form').addEventListener('submit', async (e) => {
         per_query_results: Number($('perQuery').value),
         max_candidates: Number($('maxCandidates').value),
         use_agent: useAgent,
+        fresh_only: $('freshOnly').checked,
       }),
     });
     account.runs_used = data.runs_used;

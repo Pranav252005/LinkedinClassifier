@@ -21,6 +21,10 @@ _TITLE_SPLIT = re.compile(r"\s+[-–|]\s+")
 _PROFILE_PATH = re.compile(r"^/(?:[a-z]{2,3}/)?in/[^/]+/?$", re.IGNORECASE)
 
 MAX_CONCURRENCY = 8
+# How far past page 1 a run will dig when the results it gets back are ones the
+# user has already been shown. Each extra page is another Serper credit per
+# query, so this escalates only when a page comes back stale, never by default.
+MAX_PAGES = 3
 
 
 class SearchError(RuntimeError):
@@ -110,17 +114,23 @@ def _serper_message(resp: httpx.Response) -> str:
 
 
 async def _run_query(
-    client: httpx.AsyncClient, api_key: str, spec: QuerySpec, num: int
+    client: httpx.AsyncClient, api_key: str, spec: QuerySpec, num: int, page: int = 1
 ) -> list[Candidate]:
     if not spec.query.strip():
         raise SearchError("Refusing to send an empty search query.")
+
+    body: dict = {"q": spec.query, "num": max(1, min(num, SERPER_MAX_RESULTS))}
+    # Page 1 is sent without the parameter at all, so the common case keeps the
+    # exact request shape that is known to work on a free key.
+    if page > 1:
+        body["page"] = page
 
     resp = await client.post(
         f"{SERPER_BASE_URL}/search",
         headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
         # Clamped: a free key 400s above SERPER_MAX_RESULTS, and one rejected
         # query fails the whole run.
-        json={"q": spec.query, "num": max(1, min(num, SERPER_MAX_RESULTS))},
+        json=body,
     )
     if resp.status_code in (401, 403):
         raise SearchError("Serper rejected the API key (check SERPER_API_KEY).")
@@ -137,21 +147,31 @@ async def _run_query(
 
 
 async def run_queries(
-    specs: list[QuerySpec], per_query_results: int = 10, max_candidates: int = 40
-) -> tuple[list[Candidate], list[QuerySpec]]:
-    """Run queries until enough candidates are found.
+    specs: list[QuerySpec],
+    per_query_results: int = 10,
+    max_candidates: int = 40,
+    exclude: frozenset[str] = frozenset(),
+) -> tuple[list[Candidate], list[QuerySpec], int]:
+    """Run queries until enough *new* candidates are found.
 
-    Returns (candidates, specs_actually_run) — the second differs from the input
-    whenever the early stop kicks in, and callers report it so the UI does not
-    claim credits that were never spent.
+    Returns (candidates, specs_actually_run, skipped_as_already_seen). The
+    second differs from the input whenever the early stop kicks in, and callers
+    report it so the UI does not claim credits that were never spent.
+
+    `exclude` is the set of profile URLs this user has already been shown. They
+    are filtered out rather than ranked down -- the point of a second run is to
+    see someone new -- and when a page comes back mostly excluded the same
+    queries are reissued against the next page, which is the only way to reach
+    results Google did not put in the first ten.
     """
     if not SERPER_API_KEY:
         raise SearchError("SERPER_API_KEY is not set — copy .env.example to .env and fill it in.")
     if not specs:
-        return [], []
+        return [], [], 0
 
     candidates: list[Candidate] = []
     seen: set[str] = set()
+    skipped = 0
     first_error: BaseException | None = None
     ran: list[QuerySpec] = []
 
@@ -160,29 +180,45 @@ async def run_queries(
     # than a run needs — issuing all of them would spend the budget to throw
     # most of the results away.
     async with httpx.AsyncClient(timeout=20.0) as client:
-        for start in range(0, len(specs), MAX_CONCURRENCY):
-            wave = specs[start : start + MAX_CONCURRENCY]
-            ran.extend(wave)
-            results = await asyncio.gather(
-                *(_run_query(client, SERPER_API_KEY, spec, per_query_results) for spec in wave),
-                return_exceptions=True,
-            )
-            for batch in results:
-                if isinstance(batch, BaseException):
-                    first_error = first_error or batch
-                    continue
-                for candidate in batch:
-                    if candidate.linkedin_url in seen:
+        for page in range(1, MAX_PAGES + 1):
+            page_yield = 0
+
+            for start in range(0, len(specs), MAX_CONCURRENCY):
+                wave = specs[start : start + MAX_CONCURRENCY]
+                ran.extend(wave)
+                results = await asyncio.gather(
+                    *(_run_query(client, SERPER_API_KEY, spec, per_query_results, page)
+                      for spec in wave),
+                    return_exceptions=True,
+                )
+                for batch in results:
+                    if isinstance(batch, BaseException):
+                        first_error = first_error or batch
                         continue
-                    seen.add(candidate.linkedin_url)
-                    candidates.append(candidate)
+                    for candidate in batch:
+                        url = candidate.linkedin_url
+                        if url in seen:
+                            continue
+                        seen.add(url)
+                        if url in exclude:
+                            skipped += 1
+                            continue
+                        candidates.append(candidate)
+                        page_yield += 1
+                if len(candidates) >= max_candidates:
+                    break
+
             if len(candidates) >= max_candidates:
+                break
+            # Nothing new on this page means deeper pages are the only place
+            # left to look; nothing at all means the query is exhausted.
+            if page_yield == 0 and not skipped:
                 break
 
     if not candidates and first_error is not None:
         raise SearchError(f"All search queries failed: {first_error}")
 
-    return candidates[:max_candidates], ran
+    return candidates[:max_candidates], ran, skipped
 
 
 async def find_candidates(
@@ -190,8 +226,8 @@ async def find_candidates(
     titles: list[str],
     per_query_results: int = 10,
     max_candidates: int = 40,
-) -> tuple[list[Candidate], list[QuerySpec]]:
+    exclude: frozenset[str] = frozenset(),
+) -> tuple[list[Candidate], list[QuerySpec], int]:
     """Convenience path: build queries from companies x titles, then run them."""
     specs = build_queries(companies, titles)
-    candidates, ran = await run_queries(specs, per_query_results, max_candidates)
-    return candidates, ran
+    return await run_queries(specs, per_query_results, max_candidates, exclude)

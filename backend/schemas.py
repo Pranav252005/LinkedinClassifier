@@ -35,6 +35,9 @@ class SearchRequest(BaseModel):
     per_query_results: int = Field(default=10, ge=1, le=100)
     max_candidates: int = Field(default=40, ge=1, le=200)
     use_agent: bool = Field(default=True, description="Let the OpenRouter agent expand the plan.")
+    # Repeat runs otherwise return Google's same top ten. On by default: seeing
+    # the same people again is the complaint, not the goal.
+    fresh_only: bool = Field(default=True, description="Skip results already shown to this user.")
 
 
 class SearchPlan(BaseModel):
@@ -113,6 +116,32 @@ class SearchResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     runs_used: int = 0
     runs_allowed: int = 0
+
+
+class ApproachRequest(BaseModel):
+    """Draft outreach for one result the seeker clicked on."""
+
+    kind: Literal["person", "opening"]
+    resume: str = Field(..., min_length=20, max_length=20_000)
+    role_target: str = Field(default="", max_length=200)
+    # Whatever the card already knows about the target. Kept loose because the
+    # two modes carry different fields, and the drafter only reads the ones it
+    # needs for that kind.
+    name: str = Field(default="", max_length=120)
+    headline: str = Field(default="", max_length=300)
+    title: str = Field(default="", max_length=200)
+    company: str = Field(default="", max_length=120)
+    snippet: str = Field(default="", max_length=600)
+    posted_at: str = Field(default="", max_length=40)
+    url: str = Field(default="", max_length=600)
+
+
+class ApproachResponse(BaseModel):
+    headline: str = ""
+    connection_note: str = ""
+    message: str = ""
+    talking_points: list[str] = Field(default_factory=list)
+    gap: str = ""
 
 
 class ResumeUploadResponse(BaseModel):

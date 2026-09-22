@@ -17,6 +17,7 @@ import agent
 import auth
 import billing
 import db
+import outreach
 import resume as resume_parser
 from config import (
     FRONTEND_DIR,
@@ -33,11 +34,14 @@ from config import (
     is_comp_account,
     runs_allowed,
 )
+from openrouter import OpenRouterError
 from ratelimit import RateLimiter, enforce
 import timing
 from jobs import find_openings
 from scoring import score_candidates, score_openings
 from schemas import (
+    ApproachRequest,
+    ApproachResponse,
     AccountInfo,
     Credentials,
     OpeningsResponse,
@@ -66,6 +70,10 @@ app = FastAPI(title="LeadClassifier", version="0.2.0", lifespan=lifespan)
 _signup_limit = RateLimiter(SIGNUP_LIMIT, SIGNUP_WINDOW_SECONDS, "signup")
 _login_limit = RateLimiter(LOGIN_LIMIT, LOGIN_WINDOW_SECONDS, "login")
 _run_limit = RateLimiter(RUN_LIMIT, RUN_WINDOW_SECONDS, "run")
+# Drafting outreach costs one cheap model call and no search credits, so it gets
+# its own, looser budget -- clicking through a result list should not burn the
+# run limit.
+_draft_limit = RateLimiter(RUN_LIMIT * 6, RUN_WINDOW_SECONDS, "draft")
 
 
 # --- pages -------------------------------------------------------------------
@@ -203,6 +211,44 @@ async def upload_resume(
 
 
 # --- the pipeline ------------------------------------------------------------
+
+# --- freshness ---------------------------------------------------------------
+# Identical queries return Google's identical top ten, so without this every
+# repeat run showed the same faces. None of it is fatal: if the bookkeeping
+# fails, the run still happens, it just repeats itself.
+
+def _already_seen(user_id: int, kind: str, fresh_only: bool) -> frozenset[str]:
+    if not fresh_only:
+        return frozenset()
+    try:
+        return frozenset(db.seen_urls(user_id, kind))
+    except Exception as exc:
+        log.warning("could not load seen %ss: %s", kind, exc)
+        return frozenset()
+
+
+def _remember(user_id: int, kind: str, urls: list[str]) -> None:
+    try:
+        db.record_seen(user_id, kind, urls)
+    except Exception as exc:
+        log.warning("could not record seen %ss: %s", kind, exc)
+
+
+def _freshness_note(skipped: int, noun: str, fresh_only: bool) -> list[str]:
+    if not fresh_only or skipped <= 0:
+        return []
+    return [f"Skipped {skipped} {noun} you have already been shown, and searched "
+            "deeper pages instead. Turn off “only show me new results” to see them again."]
+
+
+def _nothing_new_note(skipped: int, noun: str) -> str:
+    if skipped:
+        return (f"Nothing new — every match was one of the {skipped} {noun} you have already "
+                "been shown. Try a different role or company, or turn off "
+                "“only show me new results”.")
+    return f"No matching {noun} were publicly indexed for these searches."
+
+
 async def _run_pipeline(req: SearchRequest, user: sqlite3.Row) -> SearchResponse:
     plan = effective_plan(user)
     used, allowed = db.runs_this_month(user["id"]), runs_allowed(plan)
@@ -233,12 +279,18 @@ async def _run_pipeline(req: SearchRequest, user: sqlite3.Row) -> SearchResponse
             detail="No target companies — name at least one, or let the agent suggest some.",
         )
 
-    # 2. Source — Serper over site:linkedin.com/in.
+    # 2. Source — Serper over site:linkedin.com/in, skipping anyone this user
+    # has already been shown so a repeat run finds new people.
+    already = _already_seen(user["id"], "person", req.fresh_only)
     specs = build_queries(plan.companies, plan.titles)
     try:
-        candidates, ran = await run_queries(specs, req.per_query_results, req.max_candidates)
+        candidates, ran, skipped = await run_queries(
+            specs, req.per_query_results, req.max_candidates, already
+        )
     except SearchError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    warnings += _freshness_note(skipped, "people", req.fresh_only)
 
     # Report the queries actually sent, not the ones merely planned.
     queries = [spec.query for spec in ran]
@@ -249,7 +301,7 @@ async def _run_pipeline(req: SearchRequest, user: sqlite3.Row) -> SearchResponse
             plan=plan,
             queries_run=queries,
             results=[],
-            warnings=warnings + ["No public profiles matched these company/title combinations."],
+            warnings=warnings + [_nothing_new_note(skipped, "profiles")],
             runs_used=used + 1,
             runs_allowed=allowed,
         )
@@ -257,6 +309,7 @@ async def _run_pipeline(req: SearchRequest, user: sqlite3.Row) -> SearchResponse
     # 3. Classify — Jev scores every candidate against the resume.
     scored, score_warnings = await score_candidates(candidates, req.resume, plan.role_target)
     db.record_run(user["id"], ", ".join(plan.companies), len(scored))
+    _remember(user["id"], "person", [c.linkedin_url for c in scored])
 
     return SearchResponse(
         count=len(scored),
@@ -293,18 +346,21 @@ async def _run_openings(req: SearchRequest, user: sqlite3.Row) -> OpeningsRespon
         plan = agent.fallback_plan(req.companies, req.titles, req.role_target)
 
     roles = plan.titles or [req.role_target.strip()] or ["software engineer intern"]
+    already = _already_seen(user["id"], "opening", req.fresh_only)
     try:
-        openings, queries = await find_openings(
-            roles, plan.companies, req.per_query_results, req.max_candidates
+        openings, queries, skipped = await find_openings(
+            roles, plan.companies, req.per_query_results, req.max_candidates, already
         )
     except SearchError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    warnings += _freshness_note(skipped, "openings", req.fresh_only)
 
     if not openings:
         db.record_run(user["id"], ", ".join(plan.companies) or "any", 0)
         return OpeningsResponse(
             count=0, plan=plan, queries_run=queries, results=[],
-            warnings=warnings + ["No matching openings were publicly indexed for these searches."],
+            warnings=warnings + [_nothing_new_note(skipped, "openings")],
             runs_used=used + 1, runs_allowed=allowed,
         )
 
@@ -324,6 +380,7 @@ async def _run_openings(req: SearchRequest, user: sqlite3.Row) -> OpeningsRespon
 
     scored, score_warnings = await score_openings(openings, req.resume, plan.role_target)
     db.record_run(user["id"], ", ".join(plan.companies) or "any", len(scored))
+    _remember(user["id"], "opening", [o.url for o in scored])
 
     return OpeningsResponse(
         count=len(scored), plan=plan, queries_run=queries, results=scored,
@@ -338,6 +395,37 @@ async def openings(
 ) -> OpeningsResponse:
     enforce(_run_limit, request, "Too many runs in a short time. Try again shortly.")
     return await _run_openings(req, user)
+
+
+
+@app.post("/api/approach", response_model=ApproachResponse)
+async def approach(
+    req: ApproachRequest, request: Request, user: sqlite3.Row = Depends(auth.current_user)
+) -> ApproachResponse:
+    """What to actually say to one person, or about one posting.
+
+    Deliberately not counted against the monthly run quota: it spends no search
+    credits, and charging a run to find out how to approach someone you already
+    paid to find would be a strange thing to do to a user.
+    """
+    enforce(_draft_limit, request, "Too many drafts in a short time. Try again shortly.")
+    try:
+        drafted = await outreach.draft(
+            req.kind,
+            {
+                "name": req.name,
+                "headline": req.headline,
+                "title": req.title,
+                "company": req.company,
+                "snippet": req.snippet,
+                "posted_at": req.posted_at,
+            },
+            req.resume,
+            req.role_target,
+        )
+    except OpenRouterError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return ApproachResponse(**drafted)
 
 
 @app.post("/api/search", response_model=SearchResponse)

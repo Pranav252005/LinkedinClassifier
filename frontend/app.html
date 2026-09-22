@@ -67,6 +67,32 @@
           cursor: pointer; transition: border-color .15s, color .15s, background .15s; }
   .mode:hover { color: var(--ink); }
   .mode.on { border-color: var(--accent); color: var(--accent); background: rgba(228,0,124,.07); }
+
+  .foot-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .approach { font-size: 12px; padding: 4px 9px; }
+  .row .approach { margin-top: 6px; }
+
+  .drawer { position: fixed; inset: 0; background: rgba(0,0,0,.45);
+            display: flex; justify-content: center; align-items: flex-start;
+            padding: 24px 16px; overflow-y: auto; z-index: 50; }
+  .drawer-panel { background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+                  max-width: 640px; width: 100%; padding: 20px; }
+  .drawer-head { display: flex; justify-content: space-between; align-items: flex-start;
+                 gap: 12px; margin-bottom: 4px; }
+  .drawer-head h3 { margin: 0; font-size: 16px; }
+  .draft-angle { margin: 4px 0 0; font-size: 12.5px; color: var(--ink-faint); }
+  .draft-block { margin-top: 16px; }
+  .draft-label { display: flex; justify-content: space-between; align-items: center;
+                 font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em;
+                 color: var(--ink-faint); margin-bottom: 6px; }
+  .draft-block pre { white-space: pre-wrap; word-break: break-word; margin: 0;
+                     background: var(--bg-soft, rgba(127,127,127,.08));
+                     border: 1px solid var(--line); border-radius: 4px;
+                     padding: 10px; font: inherit; font-size: 13px; }
+  .draft-block ul { margin: 0; padding-left: 18px; font-size: 13px; }
+  .draft-block li { margin-bottom: 4px; }
+  .draft-foot { font-size: 11.5px; color: var(--ink-faint); margin: 16px 0 0; }
+  @media (max-width: 560px) { .drawer { padding: 12px; } .drawer-panel { padding: 14px; } }
   .mode-note { font-size: 11.5px; color: var(--ink-faint); margin: 0 0 16px; }
 
   .openings { display: grid; gap: 8px; }
@@ -185,6 +211,12 @@
             <input id="titles" placeholder="software engineer intern">
           </label>
         </div>
+
+        <label class="toggle">
+          <input type="checkbox" id="freshOnly" checked>
+          <span>Only show me results I haven't been shown before — repeat runs dig into
+                deeper pages instead of returning the same names.</span>
+        </label>
 
         <label class="toggle">
           <input type="checkbox" id="useAgent" checked>
