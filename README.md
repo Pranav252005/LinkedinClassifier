@@ -153,23 +153,48 @@ frontend/
 
 ## Deploying
 
-Any Python host (Render, Railway, Fly.io, a VPS):
+**Netlify cannot run the backend.** Netlify Functions are JavaScript, TypeScript and
+Go only — there is no Python runtime and no persistent ASGI process. So the deployment
+is split:
 
-- Build: `pip install -r requirements.txt`
-- Start: `cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT`
-- Set every `.env` key as a secret in the host's dashboard — **never commit `.env`**.
+| Piece | Host | Config |
+| --- | --- | --- |
+| Static frontend | Netlify | `netlify.toml` |
+| FastAPI backend | Render / Fly / Railway / any container host | `render.yaml`, `Dockerfile`, `Procfile` |
+| Database | Neon Postgres | `DATABASE_URL` |
 
-Before taking real money, three things need attention:
+Netlify proxies `/api/*`, `/login` and `/app` to the backend, so everything stays on
+one origin and the session cookie is first-party — no CORS needed. The proxy target
+comes from the `API_ORIGIN` environment variable, written into `_redirects` at build
+time by `scripts/build-redirects.sh`, so the backend URL is never committed.
 
-- **Set `secure=True` on the session cookie** in `backend/auth.py` once you're on HTTPS.
+### Order of operations
+
+1. **Backend first** — deploy `render.yaml` as a Render blueprint (or the `Dockerfile`
+   anywhere). Set `DATABASE_URL`, `SECRET_KEY`, `SERPER_API_KEY`, `OPENROUTER_API_KEY`
+   and `COMP_ACCOUNTS` in the host's dashboard. Never commit `.env`.
+2. **Point Netlify at it** — set `API_ORIGIN` to the backend origin and redeploy.
+3. **Close the loop** — set `PUBLIC_BASE_URL` on the backend to the Netlify URL. This
+   turns on `Secure` session cookies and fixes Stripe's return URLs.
+
+### Rate limits
+
+Signup is the expensive door — each free account is `FREE_RUNS_PER_MONTH` runs of paid
+Serper and OpenRouter calls. `SIGNUP_LIMIT` (default 5/hour per IP), `LOGIN_LIMIT`
+(20/15min) and `RUN_LIMIT` (10/hour) bound that. They are in-process, so with several
+workers the effective limit is limit x workers; move them to Redis if that matters.
+Set any to `0` to disable.
+
+Before taking real money:
+
+- Session cookies are `Secure` automatically whenever `PUBLIC_BASE_URL` is HTTPS.
 - **Use Postgres in production.** Set `DATABASE_URL` to a Neon (or any Postgres)
   connection string and the app stores users, plans and run counts there. Left empty it
   falls back to a local SQLite file, which is fine for one box but is wiped on redeploy
   on hosts with an ephemeral disk (Render, Fly without a volume), taking accounts and
   Pro status with it. `/api/health` reports which backend is live.
-- **Nothing rate-limits signup**, so a stranger with a script can burn your Serper,
-  OpenRouter and Jev credits three runs at a time. Put a limiter or email verification in
-  front of it before posting the link publicly.
+- Signup, login and runs are rate limited per IP (see above). Email verification would
+  be the next step up if abuse continues.
 
 ## Storage
 
