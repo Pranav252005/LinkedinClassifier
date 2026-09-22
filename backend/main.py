@@ -310,7 +310,7 @@ def _to_csv(rows: list[ScoredCandidate]) -> str:
 async def health() -> dict[str, object]:
     from config import OPENROUTER_API_KEY, SERPER_API_KEY, TYPESAFE_API_KEY
 
-    from config import SCORING_PROVIDER
+    from config import COMP_ACCOUNTS, SCORING_PROVIDER
 
     return {
         "ok": True,
@@ -319,6 +319,8 @@ async def health() -> dict[str, object]:
         "openrouter_key_set": bool(OPENROUTER_API_KEY),
         "typesafe_key_set": bool(TYPESAFE_API_KEY),
         "scoring_provider": SCORING_PROVIDER,
+        # Count only — never echo the addresses back over a public endpoint.
+        "comp_accounts": len(COMP_ACCOUNTS),
         "scoring_ready": bool(OPENROUTER_API_KEY) if SCORING_PROVIDER == "openrouter" else bool(TYPESAFE_API_KEY),
         "billing_enabled": billing_enabled(),
     }
