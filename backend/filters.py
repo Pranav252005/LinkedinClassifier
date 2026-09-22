@@ -161,6 +161,37 @@ def refuses_sponsorship(text: str) -> bool:
     return bool(_NO_SPONSOR.search(text or ""))
 
 
+# --- pay -------------------------------------------------------------------------------
+# "Unpaid" is only believed when it describes the role, not a benefit: "unpaid
+# leave" and "paid time off" say nothing about whether the job pays.
+_BENEFIT = r"(leave|time\s+off|holidays?|vacation|sick|parental|maternity|paternity|sabbatical|break|pto)"
+_UNPAID = re.compile(
+    rf"\bunpaid\b(?!\s+{_BENEFIT})|\bnon[\s-]?paid\b|\bvolunteer\s+(position|role|opportunity|basis)\b|"
+    r"\b(no|without)\s+(monetary\s+|financial\s+)?(pay|compensation|remuneration|stipend|salary)\b|"
+    r"\bequity[\s-]only\b|\bfor\s+(academic\s+|course\s+)?credit\s+only\b|"
+    r"\b(is|are)\s+not\s+(a\s+)?(paid|compensated)\b", re.I)
+_PAID = re.compile(
+    r"\bpaid\s+(internship|position|role|opportunity|fellowship|apprenticeship|placement)\b|"
+    r"\bstipend\b|\bsalary\b|\b(base|hourly)\s+pay\b|\bpay\s+(range|rate|band)\b|"
+    r"\bcompensation\s+(range|band|package)\b|\b(ctc|lpa)\b|"
+    r"[$€£₹]\s?\d|\b(usd|inr|eur|gbp)\s?\d|\d\s?(k|,000)\s*(-|–|to)|"
+    r"\bper\s+(hour|month|annum|year)\b|/\s?(hr|hour|month|mo|yr|year)\b", re.I)
+
+
+def pay_status(text: str) -> str:
+    """paid | unpaid | "" (the posting does not say).
+
+    An explicit "unpaid" wins over a pay-looking figure, since a posting that
+    says it is unpaid rarely means it by accident.
+    """
+    t = text or ""
+    if _UNPAID.search(t):
+        return "unpaid"
+    if _PAID.search(t):
+        return "paid"
+    return ""
+
+
 # --- age ------------------------------------------------------------------------------
 def age_days(posted_at: str | None, today: date | None = None) -> int | None:
     if not posted_at:
@@ -190,6 +221,7 @@ REASONS = {
     "years": "ask for more experience than you have",
     "location": "outside your locations",
     "sponsorship": "say they won't sponsor a visa",
+    "unpaid": "unpaid",
     "old": "posted too long ago",
     "closed": "closed on the board",
 }
@@ -198,7 +230,7 @@ REASONS = {
 def judge(posting, profile: Profile, max_age_days: int = 30, include_older: bool = False,
           today: date | None = None) -> Verdict:
     """Keep or drop one posting. `posting` needs title, description, location,
-    remote, posted_at, and optionally level/min_years already filled in."""
+    remote, posted_at, and optionally level/min_years/pay already filled in."""
     level = posting.level or title_level(posting.title)
     years = posting.min_years if posting.min_years is not None else required_years(posting.description)
     wants_intern = "internship" in profile.job_types
@@ -232,6 +264,11 @@ def judge(posting, profile: Profile, max_age_days: int = 30, include_older: bool
 
     if profile.needs_sponsorship and refuses_sponsorship(posting.description):
         return Verdict(False, "sponsorship")
+
+    if profile.paid_only:
+        pay = posting.pay or pay_status(f"{posting.title}\n{posting.description}")
+        if pay == "unpaid":
+            return Verdict(False, "unpaid")
 
     if not include_older:
         age = age_days(posting.posted_at, today)

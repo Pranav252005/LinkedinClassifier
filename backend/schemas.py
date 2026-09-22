@@ -43,6 +43,8 @@ class Profile(BaseModel):
     locations: list[str] = Field(default_factory=list, max_length=10)
     remote_ok: bool = True
     needs_sponsorship: bool = False
+    # Hide postings that say they are unpaid. Ones that do not say are kept.
+    paid_only: bool = False
     college: str = Field(default="", max_length=120)
     grad_year: Optional[int] = Field(default=None, ge=1970, le=2100)
     summary: str = Field(default="", max_length=400)
@@ -132,6 +134,7 @@ class Opening(BaseModel):
     department: str = ""
     level: str = ""           # intern | entry | mid | senior, read from the posting
     min_years: Optional[int] = None
+    pay: str = ""             # paid | unpaid | "" (not stated), read from the posting
     verified: bool = False    # listed by the board's own API during this run
     # The full description. Used for scoring and never sent to the browser --
     # the board link has it, and forty of them would bloat every response.

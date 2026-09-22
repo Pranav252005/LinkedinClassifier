@@ -155,6 +155,7 @@ function paintProfile() {
   $('pFull').checked = (profile.job_types || []).includes('full_time');
   $('pRemote').checked = profile.remote_ok !== false;
   $('pSponsor').checked = !!profile.needs_sponsorship;
+  $('pPaid').checked = !!profile.paid_only;
   $('pCollege').value = profile.college || '';
   $('pGrad').value = profile.grad_year || '';
   $('profileSummary').textContent = profile.summary
@@ -174,6 +175,7 @@ function readProfileForm() {
   profile.job_types = types.length ? types : ['full_time'];
   profile.remote_ok = $('pRemote').checked;
   profile.needs_sponsorship = $('pSponsor').checked;
+  profile.paid_only = $('pPaid').checked;
   profile.college = $('pCollege').value.trim();
   const grad = Number($('pGrad').value);
   profile.grad_year = grad >= 1970 && grad <= 2100 ? grad : null;
@@ -332,6 +334,11 @@ function renderOpenings(data) {
     const src = r.verified
       ? `<span class="badge live" title="listed on the company's own job board during this run">live · ${esc(r.source)}</span>`
       : `<span class="badge web" title="found by web search; the company's board could not be read">web result</span>`;
+    const pay = r.pay === 'paid'
+      ? '<span class="badge live" title="the posting mentions pay, a salary or a stipend">paid</span>'
+      : r.pay === 'unpaid'
+        ? '<span class="badge web" title="the posting says it is unpaid">unpaid</span>'
+        : '';
     const quick = r.reviewed ? '' :
       '<span class="badge quick" title="ranked by similarity only; the full description was not reviewed">quick match</span>';
     return `<article class="opening">
@@ -350,7 +357,7 @@ function renderOpenings(data) {
         ${r.error ? `<div class="rowerr">${esc(r.error)}</div>` : ''}
       </div>
       <div class="opening-foot">
-        <div>${src}${quick}${when}${close}${seen}</div>
+        <div>${src}${pay}${quick}${when}${close}${seen}</div>
         <span class="foot-actions">
           ${fbButtons('opening', i, r.feedback)}
           <button type="button" class="btn ghost approach people-btn" data-i="${i}"
@@ -451,11 +458,11 @@ function downloadCsv() {
 
   if (mode === 'jobs') {
     name = 'openings.csv';
-    header = ['fit_score', 'title', 'company', 'source', 'url', 'location', 'posted_at', 'closes_at',
+    header = ['fit_score', 'title', 'company', 'source', 'url', 'location', 'pay', 'posted_at', 'closes_at',
               'first_seen', 'level_fit', 'must_haves_met', 'skills_matched', 'skills_missing',
               'why', 'gap', 'verified', 'note'];
     lines = lastRun.results.map((r) => [
-      r.fit_score ?? '', r.title, r.company, r.source, r.apply_url || r.url, r.location, r.posted_at ?? '',
+      r.fit_score ?? '', r.title, r.company, r.source, r.apply_url || r.url, r.location, r.pay || '', r.posted_at ?? '',
       r.closes_at ?? '', r.first_seen ?? '', r.level_fit ?? '',
       r.must_haves_met == null ? '' : r.must_haves_met.toFixed(3),
       (r.skills_matched || []).join('; '), (r.skills_missing || []).join('; '),

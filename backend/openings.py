@@ -65,6 +65,7 @@ def to_opening(p: boards.Posting, company: str = "", first_seen: str | None = No
         posted_at=p.posted_at,
         closes_at=p.closes_at, first_seen=first_seen,
         level=filters.title_level(p.title), min_years=filters.required_years(p.description),
+        pay=filters.pay_status(f"{p.title}\n{p.description}"),
         verified=True,
     )
 
@@ -78,6 +79,7 @@ def row_to_opening(row) -> ScoredOpening:
         snippet=(row["description"] or "")[:300].replace("\n", " "),
         posted_at=row["posted_at"], closes_at=row["closes_at"], first_seen=row["first_seen"],
         level=filters.title_level(row["title"]), min_years=filters.required_years(row["description"] or ""),
+        pay=filters.pay_status(f"{row['title']}\n{row['description'] or ''}"),
         verified=True,
     )
 
@@ -206,7 +208,8 @@ async def _web_fallback(companies: list[str], roles: list[str], exclude: frozens
         alive = await asyncio.gather(*(check(o) for o in found))
 
     out = [ScoredOpening(**{**o.model_dump(), "key": o.key or o.url, "verified": False,
-                            "level": filters.title_level(o.title)})
+                            "level": filters.title_level(o.title),
+                            "pay": filters.pay_status(f"{o.title}\n{o.snippet}")})
            for o, ok in zip(found, alive) if ok]
     dead = len(found) - len(out)
     notes = []
@@ -301,6 +304,7 @@ async def _fill_descriptions(openings: list[ScoredOpening]) -> None:
             o.description = p.description
             o.snippet = p.description[:300].replace("\n", " ")
             o.min_years = filters.required_years(p.description)
+            o.pay = filters.pay_status(f"{o.title}\n{p.description}")
             if p.posted_at and not p.posted_approx:
                 o.posted_at = p.posted_at
         if p.extra.get("closed"):

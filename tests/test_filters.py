@@ -113,3 +113,25 @@ def test_apply_counts_reasons():
     assert [p.title for p in kept] == ["New Grad SWE"]
     assert dropped == {"level_senior": 2}
     assert "2 too senior" in filters.describe(dropped)
+
+
+@pytest.mark.parametrize("text,pay", [
+    ("This is an unpaid internship for students.", "unpaid"),
+    ("Volunteer position, no compensation.", "unpaid"),
+    ("Equity-only role for an early founding engineer.", "unpaid"),
+    ("Stipend of ₹25,000 per month.", "paid"),
+    ("Pay range: $120,000 - $150,000", "paid"),
+    ("This is a paid internship.", "paid"),
+    ("Benefits include unpaid leave and paid time off.", ""),
+    ("Build services in Go.", ""),
+])
+def test_pay_status(text, pay):
+    assert filters.pay_status(text) == pay
+
+
+def test_paid_only_drops_unpaid_keeps_unknown():
+    paid_only = NEW_GRAD.model_copy(update={"paid_only": True})
+    assert filters.judge(_o("Software Engineer", desc="This role is unpaid."), paid_only,
+                         today=TODAY).reason == "unpaid"
+    assert filters.judge(_o("Software Engineer", desc="Build things."), paid_only, today=TODAY).keep
+    assert filters.judge(_o("Software Engineer", desc="This role is unpaid."), NEW_GRAD, today=TODAY).keep
