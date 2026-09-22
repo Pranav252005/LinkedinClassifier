@@ -63,6 +63,19 @@ CREATE TABLE IF NOT EXISTS runs (
 
 CREATE INDEX IF NOT EXISTS idx_runs_user_time ON runs(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_users_customer ON users(stripe_customer_id);
+
+CREATE TABLE IF NOT EXISTS opening_sightings (
+    url         TEXT    PRIMARY KEY,
+    company     TEXT    NOT NULL DEFAULT '',
+    title       TEXT    NOT NULL DEFAULT '',
+    source      TEXT    NOT NULL DEFAULT '',
+    posted_at   TEXT,
+    first_seen  TEXT    NOT NULL,
+    last_seen   TEXT    NOT NULL,
+    times_seen  INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_sightings_company ON opening_sightings(company, first_seen);
 """
 
 _POSTGRES_SCHEMA = """
@@ -86,6 +99,19 @@ CREATE TABLE IF NOT EXISTS runs (
 
 CREATE INDEX IF NOT EXISTS idx_runs_user_time ON runs(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_users_customer ON users(stripe_customer_id);
+
+CREATE TABLE IF NOT EXISTS opening_sightings (
+    url         TEXT    PRIMARY KEY,
+    company     TEXT    NOT NULL DEFAULT '',
+    title       TEXT    NOT NULL DEFAULT '',
+    source      TEXT    NOT NULL DEFAULT '',
+    posted_at   TEXT,
+    first_seen  TEXT    NOT NULL,
+    last_seen   TEXT    NOT NULL,
+    times_seen  INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_sightings_company ON opening_sightings(company, first_seen);
 """
 
 
@@ -226,3 +252,92 @@ def close() -> None:
 
 def backend_name() -> str:
     return "postgres" if IS_POSTGRES else "sqlite"
+
+
+# --- opening sightings -------------------------------------------------------
+# Neither Greenhouse nor Lever exposes history: their feeds return what is open
+# right now, and nothing published anywhere says when a company opened the same
+# role last year. So predicting a hiring window cannot be looked up -- it has to
+# be accumulated. Every run records the postings it saw, and after a cycle or
+# two `company_history` has genuine per-company dates that were observed rather
+# than guessed.
+
+_UPSERT_SIGHTING = """
+INSERT INTO opening_sightings
+    (url, company, title, source, posted_at, first_seen, last_seen, times_seen)
+VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+ON CONFLICT (url) DO UPDATE SET
+    last_seen  = excluded.last_seen,
+    times_seen = opening_sightings.times_seen + 1,
+    -- a date only ever gets filled in, never overwritten with a blank
+    posted_at  = COALESCE(opening_sightings.posted_at, excluded.posted_at),
+    company    = CASE WHEN opening_sightings.company = ''
+                      THEN excluded.company ELSE opening_sightings.company END,
+    title      = CASE WHEN opening_sightings.title = ''
+                      THEN excluded.title ELSE opening_sightings.title END
+"""
+
+
+def record_sightings(openings: list) -> dict[str, str]:
+    """Record this run's postings; return {url: first_seen} for all of them.
+
+    first_seen is the first time *this app* saw the posting, which is an upper
+    bound on when it opened, not the opening date. Callers must keep the two
+    apart: posted_at is the board's own claim, first_seen is ours.
+    """
+    if not openings:
+        return {}
+
+    now = _now()
+    rows = [
+        (o.url, (o.company or "")[:80], (o.title or "")[:160], o.source or "",
+         getattr(o, "posted_at", None), now, now)
+        for o in openings
+    ]
+    urls = [r[0] for r in rows]
+    marks = ",".join("?" for _ in urls)
+
+    with connect() as conn:
+        if IS_POSTGRES:
+            with conn.cursor() as cur:
+                cur.executemany(_q(_UPSERT_SIGHTING), rows)
+                cur.execute(
+                    _q(f"SELECT url, first_seen FROM opening_sightings WHERE url IN ({marks})"),
+                    tuple(urls),
+                )
+                found = cur.fetchall()
+        else:
+            conn.executemany(_UPSERT_SIGHTING, rows)
+            found = conn.execute(
+                f"SELECT url, first_seen FROM opening_sightings WHERE url IN ({marks})",
+                tuple(urls),
+            ).fetchall()
+
+    return {row["url"]: row["first_seen"] for row in found}
+
+
+def company_history(company: str, limit: int = 200) -> list[Row]:
+    """Every posting observed for one company, oldest first.
+
+    This is the raw material for answering "when does this company open
+    applications" -- deliberately raw, because until a full cycle has been
+    observed the only honest answer is that there is not enough data yet.
+    """
+    with connect() as conn:
+        sql = (
+            "SELECT url, title, source, posted_at, first_seen, last_seen, times_seen "
+            "FROM opening_sightings WHERE LOWER(company) = ? "
+            "ORDER BY first_seen ASC LIMIT ?"
+        )
+        params = ((company or "").strip().lower(), limit)
+        if IS_POSTGRES:
+            with conn.cursor() as cur:
+                cur.execute(_q(sql), params)
+                return list(cur.fetchall())
+        return list(conn.execute(sql, params).fetchall())
+
+
+def sightings_count() -> int:
+    with connect() as conn:
+        row = _fetchone(conn, "SELECT COUNT(*) AS n FROM opening_sightings", ())
+        return int(row["n"]) if row else 0

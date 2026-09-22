@@ -122,6 +122,8 @@ Quotas are per calendar month, counted in SQLite, and tuned by `FREE_RUNS_PER_MO
 | `/api/resume` | POST | session | Multipart PDF/PNG/JPG → plain text |
 | `/api/search` | POST | session | Full pipeline, ranked JSON |
 | `/api/search.csv` | POST | session | Same run as a CSV download |
+| `/api/openings` | POST | session | Openings mode: live job postings, ranked |
+| `/api/openings.csv` | POST | session | Same run as a CSV download |
 | `/api/billing/checkout`, `/api/billing/portal` | POST | session | Stripe hosted pages |
 | `/api/billing/webhook` | POST | signature | Plan activation/cancellation |
 | `/api/health` | GET | — | Which keys are configured |
@@ -143,6 +145,8 @@ backend/
   openrouter.py   Shared OpenRouter client (chat + vision)
   resume.py       PDF/image -> text
   search.py       Serper sourcing and profile-URL parsing
+  jobs.py         Serper sourcing for job postings (Greenhouse/Lever/Ashby/LinkedIn)
+  timing.py       Real posted/closing dates from the boards' own JSON feeds
   jev_client.py   Jev System One client + fit-score combination
   schemas.py      Pydantic request/response models
 frontend/
@@ -196,6 +200,31 @@ Before taking real money:
   Pro status with it. `/api/health` reports which backend is live.
 - Signup, login and runs are rate limited per IP (see above). Email verification would
   be the next step up if abuse continues.
+
+## Two modes
+
+**People** finds humans to ask for a referral. **Openings** finds the postings
+themselves — the ones with an application form at the end of them — sourced from
+Greenhouse, Lever, Ashby and LinkedIn Jobs, in that order, because a direct ATS link
+opens onto an apply form while a LinkedIn job page often demands a login first.
+
+### Dates, and what can't be known
+
+Greenhouse and Lever publish their boards as unauthenticated JSON carrying real
+timestamps, so openings from those two show a genuine `posted_at` (and `closes_at`
+where the board sets a deadline). Ashby, LinkedIn and in-house portals — which is most
+Indian employers, Razorpay, PhonePe, Zomato and Swiggy included — publish no dated feed,
+so those postings show **no date at all rather than a guessed one**, and a warning on the
+run says how many.
+
+Predicting *next* cycle's opening date is a different question, and it cannot be looked
+up: both feeds return only what is open right now, and no public source says when a
+company opened the same role last year. So the app accumulates it instead. Every openings
+run records what it saw in `opening_sightings` (url, company, first seen, last seen, times
+seen). `first_seen` is an upper bound on when a posting opened — never a substitute for
+`posted_at`, and shown in the UI only once it is a genuine prior observation. After a
+full hiring cycle, `db.company_history()` holds per-company dates that were *observed*,
+which is the only honest basis for a prediction.
 
 ## Storage
 
@@ -254,7 +283,11 @@ and any Stripe event. Those accounts are never shown an upgrade button.
   a per-candidate error rather than crashing the run. Check
   [docs.typesafe.ai](https://docs.typesafe.ai/concepts/system-one) if calls start failing.
 - No `.docx` resume parsing yet (PDF, PNG, JPG, WebP only).
-- Results aren't persisted — each run lives in the browser until you export it.
+- Ranked results aren't persisted — each run lives in the browser until you export it.
+  (Openings runs do record a sighting row per posting, which is history, not results.)
+- **Timing prediction is not built yet**, only its data source. `opening_sightings`
+  starts filling from the first openings run; until a cycle has passed there is nothing
+  to predict from, and the app says nothing rather than guessing.
 - No password reset flow.
 - Search quality depends entirely on what's publicly indexed; smaller and newer companies
   return fewer usable results.

@@ -140,6 +140,10 @@ function stopProgress() {
 }
 
 /* ---------- results ---------- */
+function today() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 function scoreClass(score) {
   if (score == null) return 'lo';
   return score >= 75 ? 'hi' : score >= 45 ? 'mid' : 'lo';
@@ -160,6 +164,12 @@ function renderOpenings(data) {
     const cls = scoreClass(r.fit_score);
     const when = r.posted_at ? `<span class="badge">posted ${esc(r.posted_at)}</span>` : '';
     const close = r.closes_at ? `<span class="badge">closes ${esc(r.closes_at)}</span>` : '';
+    // Only worth showing when the board gave no date of its own, and only once
+    // it is a real prior observation — "first seen today" says nothing about
+    // when the posting actually opened.
+    const seen = (!r.posted_at && r.first_seen && r.first_seen.slice(0, 10) < today())
+      ? `<span class="badge" title="when this app first saw the posting, not when it opened">seen since ${esc(r.first_seen.slice(0, 10))}</span>`
+      : '';
     return `<article class="opening">
       <div class="opening-top">
         <div>
@@ -176,7 +186,7 @@ function renderOpenings(data) {
       <div class="opening-foot">
         <div>
           <span class="badge">${esc(r.source)}</span>
-          ${when}${close}
+          ${when}${close}${seen}
           ${r.priority ? `<span class="badge">${esc(r.priority)}</span>` : ''}
         </div>
         <a class="apply" href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">Open application →</a>
@@ -259,9 +269,10 @@ function downloadCsv() {
   if (mode === 'jobs') {
     name = 'openings.csv';
     header = ['fit_score', 'title', 'company', 'source', 'url', 'posted_at', 'closes_at',
-              'matches_profile', 'priority', 'why', 'gap', 'note'];
+              'first_seen', 'matches_profile', 'priority', 'why', 'gap', 'note'];
     lines = lastRun.results.map((r) => [
       r.fit_score ?? '', r.title, r.company, r.source, r.url, r.posted_at ?? '', r.closes_at ?? '',
+      r.first_seen ?? '',
       r.matches_profile == null ? '' : r.matches_profile.toFixed(3),
       r.priority ?? '', r.why ?? '', r.gap ?? '', r.error ?? '',
     ].map(cell).join(','));

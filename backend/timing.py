@@ -26,7 +26,16 @@ GREENHOUSE_BOARD = "https://boards-api.greenhouse.io/v1/boards/{slug}/jobs"
 LEVER_BOARD = "https://api.lever.co/v0/postings/{slug}?mode=json"
 
 TIMEOUT = 15.0
-MAX_BOARDS = 6          # distinct companies to look up per run
+# One run returns at most 30 openings, which in practice span fewer than two
+# dozen employers, so the cap is set to cover a whole run rather than a
+# fraction of it -- the old limit of 6 was why most results showed no date.
+MAX_BOARDS = 24
+MAX_CONCURRENT_BOARDS = 6   # the feeds are public JSON; do not hammer them
+
+# The only two boards that publish dated feeds. Everything else (Ashby,
+# LinkedIn, in-house portals) carries no date, and that is a property of the
+# source, not a lookup that failed.
+DATED_SOURCES = ("greenhouse", "lever")
 
 
 def _slug_from(url: str) -> str | None:
@@ -101,21 +110,31 @@ async def _lever(client: httpx.AsyncClient, slug: str) -> dict[str, dict]:
 async def enrich(openings: list) -> list[str]:
     """Attach real posted/closing dates in place. Returns warnings."""
     wanted: dict[tuple[str, str], None] = {}
+    datable = 0
     for o in openings:
-        if o.source not in ("greenhouse", "lever"):
+        if o.source not in DATED_SOURCES:
             continue
+        datable += 1
         slug = _slug_from(o.url)
         if slug:
             wanted.setdefault((o.source, slug), None)
 
     boards = list(wanted)[:MAX_BOARDS]
+    skipped_boards = len(wanted) - len(boards)
     if not boards:
-        return []
+        return _no_feed_warning(openings, datable)
+
+    limit = asyncio.Semaphore(MAX_CONCURRENT_BOARDS)
 
     async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
+
+        async def fetch(source: str, slug: str) -> dict[str, dict]:
+            async with limit:
+                fn = _greenhouse if source == "greenhouse" else _lever
+                return await fn(client, slug)
+
         fetched = await asyncio.gather(
-            *[(_greenhouse if src == "greenhouse" else _lever)(client, slug)
-              for src, slug in boards],
+            *[fetch(src, slug) for src, slug in boards],
             return_exceptions=True,
         )
 
@@ -129,6 +148,8 @@ async def enrich(openings: list) -> list[str]:
 
     matched = 0
     for o in openings:
+        if o.source not in DATED_SOURCES:
+            continue
         job_id = _job_id(o.url)
         hit = index.get(job_id) if job_id else None
         if hit:
@@ -136,11 +157,24 @@ async def enrich(openings: list) -> list[str]:
             o.closes_at = hit.get("closes_at")
             matched += 1
 
-    warnings: list[str] = []
-    unpriced = len(openings) - matched
-    if unpriced:
-        warnings.append(
-            f"{unpriced} of {len(openings)} openings carry no posting date — their board "
-            "publishes no dated feed, so none is shown rather than a guessed one."
-        )
+    warnings = _no_feed_warning(openings, datable)
+    missed = datable - matched
+    if missed > 0:
+        detail = f"{missed} of {datable} postings on a dated board could not be matched to its feed"
+        if failures:
+            detail += f" ({failures} board lookup(s) failed)"
+        if skipped_boards:
+            detail += f"; {skipped_boards} board(s) were skipped past the per-run cap of {MAX_BOARDS}"
+        warnings.append(detail + " — those show no date rather than a guessed one.")
     return warnings
+
+
+def _no_feed_warning(openings: list, datable: int) -> list[str]:
+    """Openings whose board publishes no dated feed at all."""
+    undated = len(openings) - datable
+    if not undated:
+        return []
+    return [
+        f"{undated} of {len(openings)} openings come from boards that publish no dated "
+        "feed (Ashby, LinkedIn, in-house portals), so they carry no posting date."
+    ]

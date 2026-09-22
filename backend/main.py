@@ -311,6 +311,17 @@ async def _run_openings(req: SearchRequest, user: sqlite3.Row) -> OpeningsRespon
     # Real posted/closing dates from the boards' own feeds, before scoring so
     # the ranking can see them.
     timing_warnings = await timing.enrich(openings)
+
+    # Record what this run saw. The boards publish no history, so the only
+    # honest route to "when does this company open applications" is to
+    # accumulate observations -- see the note in db.record_sightings.
+    try:
+        first_seen = db.record_sightings(openings)
+        for opening in openings:
+            opening.first_seen = first_seen.get(opening.url)
+    except Exception as exc:  # history is a nice-to-have; never fail a run for it
+        log.warning("could not record opening sightings: %s", exc)
+
     scored, score_warnings = await score_openings(openings, req.resume, plan.role_target)
     db.record_run(user["id"], ", ".join(plan.companies) or "any", len(scored))
 
@@ -382,12 +393,14 @@ async def openings_csv(
     response = await _run_openings(req, user)
     buffer = io.StringIO()
     writer = csv.writer(buffer)
-    writer.writerow(["fit_score", "title", "company", "source", "url",
-                     "matches_profile", "priority", "why", "gap", "note"])
+    writer.writerow(["fit_score", "title", "company", "source", "url", "posted_at",
+                     "closes_at", "first_seen", "matches_profile", "priority",
+                     "why", "gap", "note"])
     for row in response.results:
         writer.writerow([
             "" if row.fit_score is None else row.fit_score,
             row.title, row.company, row.source, row.url,
+            row.posted_at or "", row.closes_at or "", row.first_seen or "",
             "" if row.matches_profile is None else f"{row.matches_profile:.3f}",
             row.priority or "", row.why or "", row.gap or "", row.error or "",
         ])

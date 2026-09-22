@@ -79,6 +79,10 @@ class Opening(BaseModel):
     # Filled from the board's own API where one exists. Real dates, not guesses.
     posted_at: Optional[str] = None
     closes_at: Optional[str] = None
+    # The first time this app saw the posting. An upper bound on when it opened
+    # -- never a substitute for posted_at, and only useful once the app has been
+    # running long enough to have seen a posting appear.
+    first_seen: Optional[str] = None
 
 
 class ScoredOpening(Opening):
