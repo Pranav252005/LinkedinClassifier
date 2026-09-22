@@ -88,6 +88,18 @@ STRIPE_WEBHOOK_SECRET = _env("STRIPE_WEBHOOK_SECRET")
 
 MAX_UPLOAD_BYTES = _int_env("MAX_UPLOAD_BYTES", 8 * 1024 * 1024)
 
+# --- rate limits (per client IP; 0 disables) ---------------------------------
+# Signup is the expensive door: each free account is worth FREE_RUNS_PER_MONTH
+# runs of paid Serper/OpenRouter calls.
+SIGNUP_LIMIT = _int_env("SIGNUP_LIMIT", 5)
+SIGNUP_WINDOW_SECONDS = _int_env("SIGNUP_WINDOW_SECONDS", 3600)
+# Slows password guessing without locking anyone out of their own account.
+LOGIN_LIMIT = _int_env("LOGIN_LIMIT", 20)
+LOGIN_WINDOW_SECONDS = _int_env("LOGIN_WINDOW_SECONDS", 900)
+# The pipeline itself, on top of the monthly quota.
+RUN_LIMIT = _int_env("RUN_LIMIT", 10)
+RUN_WINDOW_SECONDS = _int_env("RUN_WINDOW_SECONDS", 3600)
+
 
 def billing_enabled() -> bool:
     return bool(STRIPE_SECRET_KEY and STRIPE_PRICE_ID)

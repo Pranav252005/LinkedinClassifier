@@ -20,13 +20,20 @@ import db
 import resume as resume_parser
 from config import (
     FRONTEND_DIR,
+    LOGIN_LIMIT,
+    LOGIN_WINDOW_SECONDS,
     MAX_UPLOAD_BYTES,
     PRO_PRICE_LABEL,
+    RUN_LIMIT,
+    RUN_WINDOW_SECONDS,
     SESSION_COOKIE,
+    SIGNUP_LIMIT,
+    SIGNUP_WINDOW_SECONDS,
     billing_enabled,
     is_comp_account,
     runs_allowed,
 )
+from ratelimit import RateLimiter, enforce
 from scoring import score_candidates
 from schemas import (
     AccountInfo,
@@ -51,6 +58,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="LeadClassifier", version="0.2.0", lifespan=lifespan)
+
+_signup_limit = RateLimiter(SIGNUP_LIMIT, SIGNUP_WINDOW_SECONDS, "signup")
+_login_limit = RateLimiter(LOGIN_LIMIT, LOGIN_WINDOW_SECONDS, "login")
+_run_limit = RateLimiter(RUN_LIMIT, RUN_WINDOW_SECONDS, "run")
 
 
 # --- pages -------------------------------------------------------------------
@@ -78,7 +89,8 @@ async def app_page(user: sqlite3.Row | None = Depends(auth.optional_user)):
 
 # --- auth --------------------------------------------------------------------
 @app.post("/api/auth/signup", response_model=AccountInfo)
-async def signup(creds: Credentials, response: Response) -> AccountInfo:
+async def signup(creds: Credentials, request: Request, response: Response) -> AccountInfo:
+    enforce(_signup_limit, request, "Too many accounts created from this address. Try again later.")
     email = auth.normalize_email(creds.email)
     auth.validate_credentials(email, creds.password)
     if db.get_user_by_email(email):
@@ -89,7 +101,8 @@ async def signup(creds: Credentials, response: Response) -> AccountInfo:
 
 
 @app.post("/api/auth/login", response_model=AccountInfo)
-async def login(creds: Credentials, response: Response) -> AccountInfo:
+async def login(creds: Credentials, request: Request, response: Response) -> AccountInfo:
+    enforce(_login_limit, request, "Too many sign-in attempts. Try again shortly.")
     email = auth.normalize_email(creds.email)
     user = db.get_user_by_email(email)
     # Same message either way — don't reveal which emails have accounts.
@@ -252,7 +265,10 @@ async def _run_pipeline(req: SearchRequest, user: sqlite3.Row) -> SearchResponse
 
 
 @app.post("/api/search", response_model=SearchResponse)
-async def search(req: SearchRequest, user: sqlite3.Row = Depends(auth.current_user)) -> SearchResponse:
+async def search(
+    req: SearchRequest, request: Request, user: sqlite3.Row = Depends(auth.current_user)
+) -> SearchResponse:
+    enforce(_run_limit, request, "Too many runs in a short time. Try again shortly.")
     return await _run_pipeline(req, user)
 
 

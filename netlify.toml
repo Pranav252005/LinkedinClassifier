@@ -2,40 +2,18 @@
 #
 # Netlify Functions run JavaScript, TypeScript and Go — not Python — so the
 # FastAPI app in backend/ cannot run here. It is deployed separately (see
-# render.yaml / Dockerfile) and Netlify forwards /api/* to it.
+# render.yaml / Dockerfile) and Netlify forwards /api, /login and /app to it.
 #
-# Because the proxy keeps everything on one origin, the session cookie is
+# The proxy keeps everything on one origin, so the session cookie stays
 # first-party and no CORS configuration is needed.
+#
+# Set API_ORIGIN in Site settings > Environment variables to the backend URL.
+# The redirect rules are generated from it at build time.
 
 [build]
   publish = "frontend"
-  # Nothing to compile: the frontend is plain HTML, CSS and JS.
-  command = "echo 'static frontend, no build step'"
+  command = "sh scripts/build-redirects.sh"
 
-# --- API proxy -------------------------------------------------------------
-# Replace BACKEND_URL with the deployed FastAPI origin, e.g.
-#   https://leadclassifier-api.onrender.com
-[[redirects]]
-  from = "/api/*"
-  to = "https://BACKEND_URL/api/:splat"
-  status = 200
-  force = true
-
-# The app's pages are served by FastAPI too, so proxy the authenticated ones
-# rather than shipping stale copies from the CDN.
-[[redirects]]
-  from = "/app"
-  to = "https://BACKEND_URL/app"
-  status = 200
-  force = true
-
-[[redirects]]
-  from = "/login"
-  to = "https://BACKEND_URL/login"
-  status = 200
-  force = true
-
-# --- headers ---------------------------------------------------------------
 [[headers]]
   for = "/*"
   [headers.values]
