@@ -8,6 +8,7 @@ import hmac
 import io
 import json
 import logging
+import secrets
 import sqlite3
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -620,6 +621,58 @@ async def search(
 ) -> SearchResponse:
     enforce(_run_limit, request, "Too many runs in a short time. Try again shortly.")
     return await _run_pipeline(req, user)
+
+
+# --- background runs ---------------------------------------------------------------
+# A run takes 30-90 seconds, longer than Netlify's proxy waits (about 26), so
+# the page starts one here and polls for the result. Kept in memory: there is
+# one instance, and a run lost to a restart is simply started again.
+_RUN_TTL = timedelta(minutes=15)
+_runs: dict[str, dict] = {}
+
+
+def _prune_runs() -> None:
+    now = datetime.now(timezone.utc)
+    for rid in [r for r, job in _runs.items() if now - job["at"] > _RUN_TTL]:
+        _runs.pop(rid, None)
+
+
+@app.post("/api/runs")
+async def start_run(
+    req: SearchRequest, request: Request, user: sqlite3.Row = Depends(auth.current_user)
+) -> dict:
+    enforce(_run_limit, request, "Too many runs in a short time. Try again shortly.")
+    _prune_runs()
+    rid = secrets.token_urlsafe(12)
+    job: dict = {"user": user["id"], "status": "running", "at": datetime.now(timezone.utc)}
+    _runs[rid] = job
+
+    async def work() -> None:
+        try:
+            run = _run_openings if req.mode == "jobs" else _run_pipeline
+            job["result"] = (await run(req, user)).model_dump(mode="json")
+            job["status"] = "done"
+        except HTTPException as exc:
+            job.update(status="error", code=exc.status_code, detail=exc.detail)
+        except Exception:
+            log.exception("background run failed")
+            job.update(status="error", code=500, detail="The run failed. Try again.")
+
+    job["task"] = asyncio.create_task(work())
+    return {"id": rid}
+
+
+@app.get("/api/runs/{rid}")
+async def get_run(rid: str, user: sqlite3.Row = Depends(auth.current_user)) -> dict:
+    job = _runs.get(rid)
+    if not job or job["user"] != user["id"]:
+        raise HTTPException(404, "That run is gone, most likely after a restart. Run it again.")
+    if job["status"] == "running":
+        return {"status": "running"}
+    _runs.pop(rid, None)
+    if job["status"] == "error":
+        raise HTTPException(job["code"], job["detail"])
+    return {"status": "done", "result": job["result"]}
 
 
 @app.post("/api/search.csv")

@@ -17,6 +17,17 @@ async function api(path, options = {}) {
   return data;
 }
 
+// Runs outlast the proxy's timeout, so the server starts one and the page
+// polls for it instead of holding a single request open.
+async function runInBackground(options) {
+  const { id } = await api('/api/runs', options);
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const job = await api(`/api/runs/${encodeURIComponent(id)}`);
+    if (job.status === 'done') return job.result;
+  }
+}
+
 /* ---------- account ---------- */
 function paintAccount() {
   if (!account) return;
@@ -833,7 +844,7 @@ $('form').addEventListener('submit', async (e) => {
   startProgress(useAgent);
 
   try {
-    const data = await api(mode === 'jobs' ? '/api/openings' : '/api/search', {
+    const data = await runInBackground({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

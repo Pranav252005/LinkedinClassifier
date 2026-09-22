@@ -177,3 +177,19 @@ def test_poll_endpoint_token(client, monkeypatch):
     assert r.json() == {"started": True}
     r = client.post("/api/admin/poll?wait=true", headers={"X-Poll-Token": "s3cret"})
     assert r.json() == {"poll": {}, "alerts": {}}
+
+
+def test_background_run(client):
+    import time
+    _signup(client)
+    body = {"mode": "jobs", "resume": RESUME, "companies": ["Stripe"], "use_agent": False,
+            "include_older": True, "profile": PROFILE}
+    rid = client.post("/api/runs", json=body).json()["id"]
+    for _ in range(100):
+        job = client.get(f"/api/runs/{rid}").json()
+        if job["status"] == "done":
+            break
+        time.sleep(0.05)
+    assert job["status"] == "done" and job["result"]["count"] >= 1
+    # Collected once, then gone.
+    assert client.get(f"/api/runs/{rid}").status_code == 404
