@@ -28,8 +28,33 @@ SYSTEM = (
 )
 
 
-def _prompt(resume: str, companies: list[str], titles: list[str], role: str) -> str:
-    return f"""Given this job seeker's resume, build a plan for finding people worth reaching out to.
+JOB_RULES = """Rules:
+- Always include every company and title the seeker explicitly named, first.
+- "titles" here are JOB TITLES TO APPLY FOR, as they appear on real postings —
+  e.g. "Software Engineer Intern", "Summer 2027 Software Engineering Intern".
+  Not the titles of people to contact.
+- Match the seeker's actual level. A student wants intern and new-grad postings,
+  not staff or principal ones.
+- Leave "companies" empty unless the seeker named some or a company is an
+  unusually strong fit — searching every board without a company filter finds
+  more openings, not fewer.
+- No commentary outside the JSON."""
+
+PEOPLE_RULES = """Rules:
+- Always include every company and title the seeker explicitly named, first.
+- Only add companies that plausibly hire this person's profile and seniority.
+- Titles should be roles that can refer, screen, or hire — recruiters, hiring
+  managers, team leads, and engineers on the relevant team. Not executives.
+- Use the plain title wording that appears on real LinkedIn profiles.
+- No commentary outside the JSON."""
+
+
+def _prompt(resume: str, companies: list[str], titles: list[str], role: str,
+            for_jobs: bool = False) -> str:
+    goal = ("build a plan for finding job openings they should apply to"
+            if for_jobs else
+            "build a plan for finding people worth reaching out to")
+    return f"""Given this job seeker's resume, {goal}.
 
 ### Resume
 {resume.strip()[:8000]}
@@ -47,17 +72,11 @@ Return JSON exactly like:
 {{
   "role_target": "short description of the role being targeted",
   "companies": ["at most {MAX_COMPANIES} company names"],
-  "titles": ["at most {MAX_TITLES} job titles of people to contact"],
+  "titles": ["at most {MAX_TITLES} {"job titles to search postings for" if for_jobs else "job titles of people to contact"}"],
   "summary": "one sentence explaining the angle you took"
 }}
 
-Rules:
-- Always include every company and title the seeker explicitly named, first.
-- Only add companies that plausibly hire this person's profile and seniority.
-- Titles should be roles that can refer, screen, or hire — recruiters, hiring
-  managers, team leads, and engineers on the relevant team. Not executives.
-- Use the plain title wording that appears on real LinkedIn profiles.
-- No commentary outside the JSON."""
+{JOB_RULES if for_jobs else PEOPLE_RULES}"""
 
 
 def _clean_list(raw: object, limit: int) -> list[str]:
@@ -105,7 +124,8 @@ def fallback_plan(companies: list[str], titles: list[str], role: str) -> SearchP
 
 
 async def plan_search(
-    resume: str, companies: list[str], titles: list[str], role: str = ""
+    resume: str, companies: list[str], titles: list[str], role: str = "",
+    for_jobs: bool = False,
 ) -> tuple[SearchPlan, list[str]]:
     """Return (plan, warnings). Never raises — falls back to the user's own input."""
     companies = [c.strip() for c in companies if c.strip()]
@@ -115,7 +135,7 @@ async def plan_search(
         raw = await chat(
             messages=[
                 {"role": "system", "content": SYSTEM},
-                {"role": "user", "content": _prompt(resume, companies, titles, role)},
+                {"role": "user", "content": _prompt(resume, companies, titles, role, for_jobs)},
             ],
             max_tokens=900,
         )
@@ -132,7 +152,7 @@ async def plan_search(
     merged_companies = _merge(companies, _clean_list(data.get("companies"), MAX_COMPANIES), MAX_COMPANIES)
     merged_titles = _merge(titles, _clean_list(data.get("titles"), MAX_TITLES), MAX_TITLES)
     if not merged_titles:
-        merged_titles = DEFAULT_TITLES.copy()
+        merged_titles = [role.strip()] if (for_jobs and role.strip()) else DEFAULT_TITLES.copy()
 
     role_target = data.get("role_target")
     summary = data.get("summary")

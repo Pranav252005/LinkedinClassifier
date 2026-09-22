@@ -6,6 +6,7 @@ const splitList = (s) => s.split(',').map((v) => v.trim()).filter(Boolean);
 
 let account = null;
 let lastRun = null;
+let mode = 'jobs';   // 'jobs' = openings to apply to, 'people' = contacts
 
 async function api(path, options = {}) {
   const res = await fetch(path, options);
@@ -144,6 +145,63 @@ function scoreClass(score) {
   return score >= 75 ? 'hi' : score >= 45 ? 'mid' : 'lo';
 }
 
+function renderOpenings(data) {
+  lastRun = data;
+  const notes = (data.warnings || []).map((w) => `<div class="note">${esc(w)}</div>`).join('');
+
+  if (!data.results.length) {
+    $('out').innerHTML = `<div id="notes">${notes}</div>
+      <div class="empty"><strong>Nothing came back</strong>
+      <p>No matching openings were publicly indexed. Try a broader role, or drop the company filter.</p></div>`;
+    return;
+  }
+
+  const cards = data.results.map((r) => {
+    const cls = scoreClass(r.fit_score);
+    const when = r.posted_at ? `<span class="badge">posted ${esc(r.posted_at)}</span>` : '';
+    const close = r.closes_at ? `<span class="badge">closes ${esc(r.closes_at)}</span>` : '';
+    return `<article class="opening">
+      <div class="opening-top">
+        <div>
+          <h3>${esc(r.title)}</h3>
+          <div class="co">${esc(r.company || 'unknown company')}</div>
+        </div>
+        <div class="score ${cls}">${r.fit_score ?? '—'}<small>FIT</small></div>
+      </div>
+      <div class="lines">
+        ${r.why ? `<div class="why">${esc(r.why)}</div>` : ''}
+        ${r.gap ? `<div class="gap">${esc(r.gap)}</div>` : ''}
+        ${r.error ? `<div class="rowerr">${esc(r.error)}</div>` : ''}
+      </div>
+      <div class="opening-foot">
+        <div>
+          <span class="badge">${esc(r.source)}</span>
+          ${when}${close}
+          ${r.priority ? `<span class="badge">${esc(r.priority)}</span>` : ''}
+        </div>
+        <a class="apply" href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">Open application →</a>
+      </div>
+    </article>`;
+  }).join('');
+
+  const plan = data.plan || {};
+  const chips = [...(plan.titles || []), ...(plan.companies || [])]
+    .map((c) => `<span class="chip">${esc(c)}</span>`).join('');
+  const queries = (data.queries_run || []).map((q) => `<div>${esc(q)}</div>`).join('');
+
+  $('out').innerHTML = `
+    <div class="results-head">
+      <h2>${data.count} opening${data.count === 1 ? '' : 's'}, ranked by fit</h2>
+      <button class="btn ghost" id="csv">Download CSV</button>
+    </div>
+    ${plan.summary ? `<p class="plan-line">${esc(plan.summary)}</p>` : ''}
+    <div class="chips">${chips}</div>
+    <div id="notes">${notes}</div>
+    <div class="openings">${cards}</div>
+    <details><summary>${(data.queries_run || []).length} searches run</summary><div>${queries}</div></details>`;
+  $('csv').addEventListener('click', downloadCsv);
+}
+
 function render(data) {
   lastRun = data;
   const notes = (data.warnings || []).map((w) => `<div class="note">${esc(w)}</div>`).join('');
@@ -165,6 +223,10 @@ function render(data) {
       <div>
         <a class="name" href="${esc(r.linkedin_url)}" target="_blank" rel="noopener noreferrer nofollow">${esc(r.name)}</a>
         <div class="head">${esc(r.headline || r.snippet)}</div>
+        ${(r.reason || r.ask) ? `<div class="rowlines">
+          ${r.reason ? `<div class="reason">${esc(r.reason)}</div>` : ''}
+          ${r.ask ? `<div class="ask">${esc(r.ask)}</div>` : ''}
+        </div>` : ''}
         ${err}
       </div>
       <div class="meta">${esc(r.company_query)}<br>plausible ${prob} · ${pri}</div>
@@ -192,16 +254,32 @@ function render(data) {
 
 function downloadCsv() {
   const cell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-  const header = ['name', 'headline', 'company', 'linkedin_url', 'fit_score', 'plausible_contact', 'priority', 'note'];
-  const lines = lastRun.results.map((r) => [
-    r.name, r.headline, r.company_query, r.linkedin_url,
-    r.fit_score ?? '', r.plausible_contact == null ? '' : r.plausible_contact.toFixed(3),
-    r.priority ?? '', r.error ?? '',
-  ].map(cell).join(','));
+  let header, lines, name;
+
+  if (mode === 'jobs') {
+    name = 'openings.csv';
+    header = ['fit_score', 'title', 'company', 'source', 'url', 'posted_at', 'closes_at',
+              'matches_profile', 'priority', 'why', 'gap', 'note'];
+    lines = lastRun.results.map((r) => [
+      r.fit_score ?? '', r.title, r.company, r.source, r.url, r.posted_at ?? '', r.closes_at ?? '',
+      r.matches_profile == null ? '' : r.matches_profile.toFixed(3),
+      r.priority ?? '', r.why ?? '', r.gap ?? '', r.error ?? '',
+    ].map(cell).join(','));
+  } else {
+    name = 'contacts.csv';
+    header = ['name', 'headline', 'company', 'linkedin_url', 'fit_score', 'plausible_contact',
+              'priority', 'reason', 'ask', 'note'];
+    lines = lastRun.results.map((r) => [
+      r.name, r.headline, r.company_query, r.linkedin_url,
+      r.fit_score ?? '', r.plausible_contact == null ? '' : r.plausible_contact.toFixed(3),
+      r.priority ?? '', r.reason ?? '', r.ask ?? '', r.error ?? '',
+    ].map(cell).join(','));
+  }
+
   const blob = new Blob([[header.join(','), ...lines].join('\n')], { type: 'text/csv' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = 'contacts.csv';
+  a.download = name;
   a.click();
   URL.revokeObjectURL(a.href);
 }
@@ -219,8 +297,12 @@ $('form').addEventListener('submit', async (e) => {
 
   const useAgent = $('useAgent').checked;
   const companies = splitList($('companies').value);
-  if (!useAgent && !companies.length) {
+  if (!useAgent && !companies.length && mode === 'people') {
     banner('With the agent off, you need to name at least one company yourself.');
+    return;
+  }
+  if (!useAgent && !companies.length && !splitList($('titles').value).length) {
+    banner('With the agent off, name at least one role or company to search for.');
     return;
   }
 
@@ -229,10 +311,11 @@ $('form').addEventListener('submit', async (e) => {
   startProgress(useAgent);
 
   try {
-    const data = await api('/api/search', {
+    const data = await api(mode === 'jobs' ? '/api/openings' : '/api/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        mode,
         resume,
         role_target: $('role').value,
         companies,
@@ -245,7 +328,7 @@ $('form').addEventListener('submit', async (e) => {
     account.runs_used = data.runs_used;
     account.runs_allowed = data.runs_allowed;
     paintAccount();
-    render(data);
+    (mode === 'jobs' ? renderOpenings : render)(data);
   } catch (err) {
     $('out').innerHTML = `<div class="note bad">${esc(err.message)}</div>`;
     if (/searches this month/i.test(err.message) && !$('upgrade').hidden) {
@@ -254,8 +337,9 @@ $('form').addEventListener('submit', async (e) => {
   } finally {
     stopProgress();
     $('go').disabled = false;
-    $('go').textContent = 'Run the pipeline';
+    $('go').textContent = MODE_COPY[mode].go;
   }
 });
 
+paintMode();
 loadAccount().catch((err) => banner(err.message));

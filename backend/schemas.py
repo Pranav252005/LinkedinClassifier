@@ -25,6 +25,8 @@ class AccountInfo(BaseModel):
 
 # --- search ------------------------------------------------------------------
 class SearchRequest(BaseModel):
+    # "people" finds humans to contact; "jobs" finds openings you can apply to.
+    mode: Literal["people", "jobs"] = "people"
     resume: str = Field(..., min_length=20, max_length=20_000)
     companies: list[str] = Field(default_factory=list)
     titles: list[str] = Field(default_factory=list)
@@ -58,7 +60,45 @@ class ScoredCandidate(Candidate):
     fit_score: Optional[int] = Field(default=None, ge=0, le=100)
     plausible_contact: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     priority: Optional[Literal["high", "medium", "low"]] = None
+    # Why this person is worth connecting to, and what to actually ask them.
+    reason: Optional[str] = Field(default=None, max_length=400)
+    ask: Optional[str] = Field(default=None, max_length=400)
     error: Optional[str] = None
+
+
+# --- openings ----------------------------------------------------------------
+class Opening(BaseModel):
+    """A job posting found in public search results, before scoring."""
+
+    title: str
+    company: str = ""
+    source: str = ""          # greenhouse | lever | ashby | linkedin
+    url: str
+    snippet: str = ""
+    query: str = ""
+    # Filled from the board's own API where one exists. Real dates, not guesses.
+    posted_at: Optional[str] = None
+    closes_at: Optional[str] = None
+
+
+class ScoredOpening(Opening):
+    fit_score: Optional[int] = Field(default=None, ge=0, le=100)
+    matches_profile: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    priority: Optional[Literal["high", "medium", "low"]] = None
+    # One line on why it fits, and the single biggest thing working against it.
+    why: Optional[str] = Field(default=None, max_length=400)
+    gap: Optional[str] = Field(default=None, max_length=400)
+    error: Optional[str] = None
+
+
+class OpeningsResponse(BaseModel):
+    count: int
+    plan: "SearchPlan"
+    queries_run: list[str]
+    results: list[ScoredOpening]
+    warnings: list[str] = Field(default_factory=list)
+    runs_used: int = 0
+    runs_allowed: int = 0
 
 
 class SearchResponse(BaseModel):

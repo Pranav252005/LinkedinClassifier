@@ -34,12 +34,16 @@ from config import (
     runs_allowed,
 )
 from ratelimit import RateLimiter, enforce
-from scoring import score_candidates
+import timing
+from jobs import find_openings
+from scoring import score_candidates, score_openings
 from schemas import (
     AccountInfo,
     Credentials,
+    OpeningsResponse,
     ResumeUploadResponse,
     ScoredCandidate,
+    ScoredOpening,
     SearchRequest,
     SearchResponse,
 )
@@ -265,6 +269,66 @@ async def _run_pipeline(req: SearchRequest, user: sqlite3.Row) -> SearchResponse
     )
 
 
+async def _run_openings(req: SearchRequest, user: sqlite3.Row) -> OpeningsResponse:
+    plan_ = effective_plan(user)
+    used, allowed = db.runs_this_month(user["id"]), runs_allowed(plan_)
+    if used >= allowed:
+        raise HTTPException(
+            status_code=402,
+            detail=(
+                f"You've used all {allowed} searches this month on the {plan_.title()} plan."
+                + ("" if plan_ == "pro" else " Upgrade to Pro for more.")
+            ),
+        )
+
+    warnings: list[str] = []
+
+    # The agent plans job titles to search for here, not people to contact.
+    if req.use_agent:
+        plan, plan_warnings = await agent.plan_search(
+            req.resume, req.companies, req.titles, req.role_target, for_jobs=True
+        )
+        warnings += plan_warnings
+    else:
+        plan = agent.fallback_plan(req.companies, req.titles, req.role_target)
+
+    roles = plan.titles or [req.role_target.strip()] or ["software engineer intern"]
+    try:
+        openings, queries = await find_openings(
+            roles, plan.companies, req.per_query_results, req.max_candidates
+        )
+    except SearchError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if not openings:
+        db.record_run(user["id"], ", ".join(plan.companies) or "any", 0)
+        return OpeningsResponse(
+            count=0, plan=plan, queries_run=queries, results=[],
+            warnings=warnings + ["No matching openings were publicly indexed for these searches."],
+            runs_used=used + 1, runs_allowed=allowed,
+        )
+
+    # Real posted/closing dates from the boards' own feeds, before scoring so
+    # the ranking can see them.
+    timing_warnings = await timing.enrich(openings)
+    scored, score_warnings = await score_openings(openings, req.resume, plan.role_target)
+    db.record_run(user["id"], ", ".join(plan.companies) or "any", len(scored))
+
+    return OpeningsResponse(
+        count=len(scored), plan=plan, queries_run=queries, results=scored,
+        warnings=warnings + timing_warnings + score_warnings,
+        runs_used=used + 1, runs_allowed=allowed,
+    )
+
+
+@app.post("/api/openings", response_model=OpeningsResponse)
+async def openings(
+    req: SearchRequest, request: Request, user: sqlite3.Row = Depends(auth.current_user)
+) -> OpeningsResponse:
+    enforce(_run_limit, request, "Too many runs in a short time. Try again shortly.")
+    return await _run_openings(req, user)
+
+
 @app.post("/api/search", response_model=SearchResponse)
 async def search(
     req: SearchRequest, request: Request, user: sqlite3.Row = Depends(auth.current_user)
@@ -289,7 +353,8 @@ def _to_csv(rows: list[ScoredCandidate]) -> str:
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow(
-        ["name", "headline", "company", "linkedin_url", "fit_score", "plausible_contact", "priority", "note"]
+        ["name", "headline", "company", "linkedin_url", "fit_score", "plausible_contact",
+         "priority", "reason", "ask", "note"]
     )
     for row in rows:
         writer.writerow(
@@ -301,10 +366,36 @@ def _to_csv(rows: list[ScoredCandidate]) -> str:
                 "" if row.fit_score is None else row.fit_score,
                 "" if row.plausible_contact is None else f"{row.plausible_contact:.3f}",
                 row.priority or "",
+                row.reason or "",
+                row.ask or "",
                 row.error or "",
             ]
         )
     return buffer.getvalue()
+
+
+@app.post("/api/openings.csv")
+async def openings_csv(
+    req: SearchRequest, request: Request, user: sqlite3.Row = Depends(auth.current_user)
+) -> StreamingResponse:
+    enforce(_run_limit, request, "Too many runs in a short time. Try again shortly.")
+    response = await _run_openings(req, user)
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["fit_score", "title", "company", "source", "url",
+                     "matches_profile", "priority", "why", "gap", "note"])
+    for row in response.results:
+        writer.writerow([
+            "" if row.fit_score is None else row.fit_score,
+            row.title, row.company, row.source, row.url,
+            "" if row.matches_profile is None else f"{row.matches_profile:.3f}",
+            row.priority or "", row.why or "", row.gap or "", row.error or "",
+        ])
+    return StreamingResponse(
+        io.BytesIO(buffer.getvalue().encode("utf-8")),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="openings.csv"'},
+    )
 
 
 @app.get("/api/health")
