@@ -10,3 +10,7 @@ frontend/_redirects
 
 # Local Netlify folder
 .netlify
+
+# Hand labels for scripts/eval.py -- personal search data
+labels*.jsonl
+.pytest_cache/

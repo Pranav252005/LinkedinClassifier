@@ -207,10 +207,12 @@ def init_db() -> None:
     if IS_POSTGRES:
         with connect() as conn, conn.cursor() as cur:
             cur.execute(_POSTGRES_SCHEMA)
+            cur.execute(_extra_schema())
         return
 
     with connect() as conn:
         conn.executescript(_SQLITE_SCHEMA)
+        conn.executescript(_extra_schema())
 
 
 # --- users -------------------------------------------------------------------
@@ -253,10 +255,15 @@ def set_plan_by_customer(customer_id: str, plan: str, renews_at: str | None = No
 
 
 # --- runs / quota ------------------------------------------------------------
-def record_run(user_id: int, companies: str, found: int) -> None:
+def record_run(user_id: int, companies: str, found: int) -> int:
+    """Count a run against the quota; returns its id."""
+    sql = "INSERT INTO runs (user_id, created_at, companies, found) VALUES (?, ?, ?, ?)"
+    params = (user_id, _now(), companies[:2000], found)
     with connect() as conn:
-        _run(conn, "INSERT INTO runs (user_id, created_at, companies, found) VALUES (?, ?, ?, ?)",
-             (user_id, _now(), companies, found))
+        if IS_POSTGRES:
+            row = _fetchone(conn, sql + " RETURNING id", params)
+            return int(row["id"])
+        return int(conn.execute(sql, params).lastrowid)
 
 
 def runs_this_month(user_id: int) -> int:
@@ -279,92 +286,8 @@ def backend_name() -> str:
 
 
 # --- opening sightings -------------------------------------------------------
-# Neither Greenhouse nor Lever exposes history: their feeds return what is open
-# right now, and nothing published anywhere says when a company opened the same
-# role last year. So predicting a hiring window cannot be looked up -- it has to
-# be accumulated. Every run records the postings it saw, and after a cycle or
-# two `company_history` has genuine per-company dates that were observed rather
-# than guessed.
-
-_UPSERT_SIGHTING = """
-INSERT INTO opening_sightings
-    (url, company, title, source, posted_at, first_seen, last_seen, times_seen)
-VALUES (?, ?, ?, ?, ?, ?, ?, 1)
-ON CONFLICT (url) DO UPDATE SET
-    last_seen  = excluded.last_seen,
-    times_seen = opening_sightings.times_seen + 1,
-    -- a date only ever gets filled in, never overwritten with a blank
-    posted_at  = COALESCE(opening_sightings.posted_at, excluded.posted_at),
-    company    = CASE WHEN opening_sightings.company = ''
-                      THEN excluded.company ELSE opening_sightings.company END,
-    title      = CASE WHEN opening_sightings.title = ''
-                      THEN excluded.title ELSE opening_sightings.title END
-"""
-
-
-def record_sightings(openings: list) -> dict[str, str]:
-    """Record this run's postings; return {url: first_seen} for all of them.
-
-    first_seen is the first time *this app* saw the posting, which is an upper
-    bound on when it opened, not the opening date. Callers must keep the two
-    apart: posted_at is the board's own claim, first_seen is ours.
-    """
-    if not openings:
-        return {}
-
-    now = _now()
-    rows = [
-        (o.url, (o.company or "")[:80], (o.title or "")[:160], o.source or "",
-         getattr(o, "posted_at", None), now, now)
-        for o in openings
-    ]
-    urls = [r[0] for r in rows]
-    marks = ",".join("?" for _ in urls)
-
-    with connect() as conn:
-        if IS_POSTGRES:
-            with conn.cursor() as cur:
-                cur.executemany(_q(_UPSERT_SIGHTING), rows)
-                cur.execute(
-                    _q(f"SELECT url, first_seen FROM opening_sightings WHERE url IN ({marks})"),
-                    tuple(urls),
-                )
-                found = cur.fetchall()
-        else:
-            conn.executemany(_UPSERT_SIGHTING, rows)
-            found = conn.execute(
-                f"SELECT url, first_seen FROM opening_sightings WHERE url IN ({marks})",
-                tuple(urls),
-            ).fetchall()
-
-    return {row["url"]: row["first_seen"] for row in found}
-
-
-def company_history(company: str, limit: int = 200) -> list[Row]:
-    """Every posting observed for one company, oldest first.
-
-    This is the raw material for answering "when does this company open
-    applications" -- deliberately raw, because until a full cycle has been
-    observed the only honest answer is that there is not enough data yet.
-    """
-    with connect() as conn:
-        sql = (
-            "SELECT url, title, source, posted_at, first_seen, last_seen, times_seen "
-            "FROM opening_sightings WHERE LOWER(company) = ? "
-            "ORDER BY first_seen ASC LIMIT ?"
-        )
-        params = ((company or "").strip().lower(), limit)
-        if IS_POSTGRES:
-            with conn.cursor() as cur:
-                cur.execute(_q(sql), params)
-                return list(cur.fetchall())
-        return list(conn.execute(sql, params).fetchall())
-
-
-def sightings_count() -> int:
-    with connect() as conn:
-        row = _fetchone(conn, "SELECT COUNT(*) AS n FROM opening_sightings", ())
-        return int(row["n"]) if row else 0
+# Superseded by the `postings` table, which the daily poll fills for every known
+# board. The old table is still created so the history it holds is not dropped.
 
 
 # --- what a user has already been shown --------------------------------------
@@ -419,3 +342,520 @@ def forget_seen(user_id: int, kind: str | None = None) -> int:
             return _run(conn, "DELETE FROM user_seen WHERE user_id = ? AND kind = ?",
                         (user_id, kind))
         return _run(conn, "DELETE FROM user_seen WHERE user_id = ?", (user_id,))
+
+
+# --- shared helpers for the tables below ---------------------------------------
+def _fetchall(conn: Any, sql: str, params: tuple = ()) -> list[Row]:
+    if IS_POSTGRES:
+        with conn.cursor() as cur:
+            cur.execute(_q(sql), params)
+            return list(cur.fetchall())
+    return list(conn.execute(sql, params).fetchall())
+
+
+def _many(conn: Any, sql: str, rows: list[tuple]) -> None:
+    if not rows:
+        return
+    if IS_POSTGRES:
+        with conn.cursor() as cur:
+            cur.executemany(_q(sql), rows)
+    else:
+        conn.executemany(sql, rows)
+
+
+def _marks(n: int) -> str:
+    return ",".join("?" for _ in range(n))
+
+
+# Written once, formatted per backend. Every table here is new, so creating them
+# on an existing database never touches the tables above.
+_EXTRA_SCHEMA = """
+CREATE TABLE IF NOT EXISTS company_boards (
+    company_key  TEXT PRIMARY KEY,
+    company      TEXT NOT NULL DEFAULT '',
+    ats          TEXT,
+    slug         TEXT,
+    found_via    TEXT NOT NULL DEFAULT '',
+    checked_at   TEXT NOT NULL,
+    last_polled  TEXT,
+    job_count    INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_boards_board ON company_boards(ats, slug);
+
+CREATE TABLE IF NOT EXISTS postings (
+    key          TEXT PRIMARY KEY,
+    ats          TEXT NOT NULL,
+    slug         TEXT NOT NULL,
+    job_id       TEXT NOT NULL,
+    company      TEXT NOT NULL DEFAULT '',
+    title        TEXT NOT NULL DEFAULT '',
+    url          TEXT NOT NULL DEFAULT '',
+    apply_url    TEXT NOT NULL DEFAULT '',
+    location     TEXT NOT NULL DEFAULT '',
+    remote       INTEGER,
+    department   TEXT NOT NULL DEFAULT '',
+    description  TEXT NOT NULL DEFAULT '',
+    posted_at    TEXT,
+    closes_at    TEXT,
+    first_seen   TEXT NOT NULL,
+    last_seen    TEXT NOT NULL,
+    closed_at    TEXT,
+    content_hash TEXT NOT NULL DEFAULT '',
+    embedding    TEXT,
+    embed_hash   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_postings_board ON postings(ats, slug, closed_at);
+CREATE INDEX IF NOT EXISTS idx_postings_first_seen ON postings(first_seen);
+CREATE INDEX IF NOT EXISTS idx_postings_company ON postings(company);
+
+CREATE TABLE IF NOT EXISTS profiles (
+    user_id     {BIGINT} PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    data        TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS run_results (
+    run_id      {BIGINT} NOT NULL,
+    kind        TEXT NOT NULL,
+    item_key    TEXT NOT NULL,
+    rank        INTEGER NOT NULL,
+    fit_score   INTEGER,
+    features    TEXT NOT NULL DEFAULT '{{}}',
+    url         TEXT NOT NULL DEFAULT '',
+    title       TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (run_id, item_key)
+);
+
+CREATE TABLE IF NOT EXISTS feedback (
+    user_id     {BIGINT} NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind        TEXT NOT NULL,
+    item_key    TEXT NOT NULL,
+    run_id      {BIGINT},
+    rating      INTEGER NOT NULL DEFAULT 0,
+    applied     INTEGER NOT NULL DEFAULT 0,
+    messaged    INTEGER NOT NULL DEFAULT 0,
+    replied     INTEGER NOT NULL DEFAULT 0,
+    fit_score   INTEGER,
+    features    TEXT NOT NULL DEFAULT '{{}}',
+    url         TEXT NOT NULL DEFAULT '',
+    title       TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    PRIMARY KEY (user_id, kind, item_key)
+);
+
+CREATE TABLE IF NOT EXISTS run_costs (
+    run_id            {BIGINT} PRIMARY KEY,
+    user_id           {BIGINT},
+    kind              TEXT NOT NULL DEFAULT '',
+    created_at        TEXT NOT NULL,
+    serper_calls      INTEGER NOT NULL DEFAULT 0,
+    board_requests    INTEGER NOT NULL DEFAULT 0,
+    llm_calls         INTEGER NOT NULL DEFAULT 0,
+    prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    embed_tokens      INTEGER NOT NULL DEFAULT 0,
+    cost_usd          {FLOAT} NOT NULL DEFAULT 0,
+    duration_ms       INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS model_weights (
+    id          {ID},
+    kind        TEXT NOT NULL,
+    weights     TEXT NOT NULL,
+    n_labels    INTEGER NOT NULL,
+    metric      {FLOAT},
+    created_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS saved_searches (
+    id           {ID},
+    user_id      {BIGINT} NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name         TEXT NOT NULL DEFAULT '',
+    profile      TEXT NOT NULL DEFAULT '{{}}',
+    roles        TEXT NOT NULL DEFAULT '[]',
+    companies    TEXT NOT NULL DEFAULT '[]',
+    min_score    INTEGER NOT NULL DEFAULT 60,
+    embedding    TEXT,
+    created_at   TEXT NOT NULL,
+    last_checked TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_saved_user ON saved_searches(user_id);
+
+CREATE TABLE IF NOT EXISTS alerts (
+    id           {ID},
+    user_id      {BIGINT} NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    search_id    {BIGINT} NOT NULL,
+    posting_key  TEXT NOT NULL,
+    score        INTEGER NOT NULL DEFAULT 0,
+    created_at   TEXT NOT NULL,
+    seen         INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (search_id, posting_key)
+);
+CREATE INDEX IF NOT EXISTS idx_alerts_user ON alerts(user_id, seen, created_at);
+"""
+
+
+def _extra_schema() -> str:
+    if IS_POSTGRES:
+        return _EXTRA_SCHEMA.format(
+            ID="BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY",
+            BIGINT="BIGINT", FLOAT="DOUBLE PRECISION")
+    return _EXTRA_SCHEMA.format(
+        ID="INTEGER PRIMARY KEY AUTOINCREMENT", BIGINT="INTEGER", FLOAT="REAL")
+
+
+# --- company -> board registry ------------------------------------------------
+def company_key(company: str) -> str:
+    return " ".join((company or "").lower().split())
+
+
+def get_board(company: str) -> Optional[Row]:
+    with connect() as conn:
+        return _fetchone(conn, "SELECT * FROM company_boards WHERE company_key = ?",
+                         (company_key(company),))
+
+
+def save_board(company: str, ats: str | None, slug: str | None, found_via: str,
+               job_count: int = 0) -> None:
+    """Record where a company's board lives -- or that none was found (ats NULL)."""
+    sql = """
+    INSERT INTO company_boards (company_key, company, ats, slug, found_via, checked_at, job_count)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT (company_key) DO UPDATE SET
+        company = excluded.company, ats = excluded.ats, slug = excluded.slug,
+        found_via = excluded.found_via, checked_at = excluded.checked_at,
+        job_count = excluded.job_count
+    """
+    with connect() as conn:
+        _run(conn, sql, (company_key(company), company.strip()[:80], ats, slug, found_via,
+                         _now(), job_count))
+
+
+def mark_polled(ats: str, slug: str, job_count: int) -> None:
+    with connect() as conn:
+        _run(conn, "UPDATE company_boards SET last_polled = ?, job_count = ? WHERE ats = ? AND slug = ?",
+             (_now(), job_count, ats, slug))
+
+
+def known_boards() -> list[Row]:
+    """Every company with a board found, for the daily poll."""
+    with connect() as conn:
+        return _fetchall(conn, "SELECT * FROM company_boards WHERE ats IS NOT NULL "
+                               "ORDER BY last_polled IS NOT NULL, last_polled")
+
+
+# --- postings -------------------------------------------------------------------
+_UPSERT_POSTING = """
+INSERT INTO postings (key, ats, slug, job_id, company, title, url, apply_url, location, remote,
+                      department, description, posted_at, closes_at, first_seen, last_seen,
+                      closed_at, content_hash)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+ON CONFLICT (key) DO UPDATE SET
+    company = CASE WHEN excluded.company = '' THEN postings.company ELSE excluded.company END,
+    title = excluded.title, url = excluded.url, apply_url = excluded.apply_url,
+    location = excluded.location, remote = excluded.remote, department = excluded.department,
+    description = CASE WHEN excluded.description = '' THEN postings.description
+                       ELSE excluded.description END,
+    posted_at = COALESCE(excluded.posted_at, postings.posted_at),
+    closes_at = COALESCE(excluded.closes_at, postings.closes_at),
+    last_seen = excluded.last_seen,
+    closed_at = NULL,
+    content_hash = CASE WHEN excluded.description = '' THEN postings.content_hash
+                        ELSE excluded.content_hash END
+"""
+
+
+def upsert_postings(postings: list, seen_at: str | None = None) -> dict[str, str]:
+    """Store what a board lists right now. Returns {key: first_seen}."""
+    if not postings:
+        return {}
+    now = seen_at or _now()
+    rows = []
+    for p in postings:
+        remote = None if p.remote is None else int(bool(p.remote))
+        rows.append((p.key, p.ats, p.slug, p.job_id, (p.company or "")[:80], p.title[:200],
+                     p.url[:600], (p.apply_url or "")[:600], (p.location or "")[:200], remote,
+                     (p.department or "")[:120], p.description or "",
+                     None if p.posted_approx else p.posted_at, p.closes_at, now, now,
+                     p.content_hash() if p.description else ""))
+    keys = [r[0] for r in rows]
+    out: dict[str, str] = {}
+    with connect() as conn:
+        _many(conn, _UPSERT_POSTING, rows)
+        for start in range(0, len(keys), 500):
+            chunk = keys[start:start + 500]
+            for row in _fetchall(conn, f"SELECT key, first_seen FROM postings WHERE key IN ({_marks(len(chunk))})",
+                                 tuple(chunk)):
+                out[row["key"]] = row["first_seen"]
+    return out
+
+
+def close_missing(ats: str, slug: str, listed_before: str) -> int:
+    """A posting the board no longer lists is closed. Call only after a full listing."""
+    with connect() as conn:
+        return _run(conn, "UPDATE postings SET closed_at = ? WHERE ats = ? AND slug = ? "
+                          "AND closed_at IS NULL AND last_seen < ?",
+                    (_now(), ats, slug, listed_before))
+
+
+def close_posting(key: str) -> None:
+    with connect() as conn:
+        _run(conn, "UPDATE postings SET closed_at = ? WHERE key = ? AND closed_at IS NULL", (_now(), key))
+
+
+def open_postings_for(boards: list[tuple[str, str]]) -> list[Row]:
+    """Open postings on these boards, as last stored."""
+    if not boards:
+        return []
+    out: list[Row] = []
+    with connect() as conn:
+        for ats, slug in boards:
+            out += _fetchall(conn, "SELECT * FROM postings WHERE ats = ? AND slug = ? AND closed_at IS NULL",
+                             (ats, slug))
+    return out
+
+
+def get_posting(key: str) -> Optional[Row]:
+    with connect() as conn:
+        return _fetchone(conn, "SELECT * FROM postings WHERE key = ?", (key,))
+
+
+def postings_first_seen_since(since: str, limit: int = 5000) -> list[Row]:
+    with connect() as conn:
+        return _fetchall(conn, "SELECT * FROM postings WHERE first_seen >= ? AND closed_at IS NULL "
+                               "ORDER BY first_seen DESC LIMIT ?", (since, limit))
+
+
+def get_embeddings(keys: list[str]) -> dict[str, tuple[str, str]]:
+    """{key: (embedding_b64, embed_hash)} for postings that have one stored."""
+    out: dict[str, tuple[str, str]] = {}
+    if not keys:
+        return out
+    with connect() as conn:
+        for start in range(0, len(keys), 500):
+            chunk = keys[start:start + 500]
+            for row in _fetchall(conn, f"SELECT key, embedding, embed_hash FROM postings "
+                                       f"WHERE key IN ({_marks(len(chunk))}) AND embedding IS NOT NULL",
+                                 tuple(chunk)):
+                out[row["key"]] = (row["embedding"], row["embed_hash"] or "")
+    return out
+
+
+def set_embeddings(rows: list[tuple[str, str, str]]) -> None:
+    """rows of (key, embedding_b64, embed_hash)."""
+    with connect() as conn:
+        _many(conn, "UPDATE postings SET embedding = ?, embed_hash = ? WHERE key = ?",
+              [(emb, h, key) for key, emb, h in rows])
+
+
+def company_postings(company: str, limit: int = 2000) -> list[Row]:
+    """Every posting ever stored for a company, open or closed, oldest first."""
+    with connect() as conn:
+        return _fetchall(conn, "SELECT title, first_seen, last_seen, posted_at, closed_at FROM postings "
+                               "WHERE LOWER(company) = ? ORDER BY first_seen LIMIT ?",
+                         (company_key(company), limit))
+
+
+# --- structured profiles ---------------------------------------------------------
+def save_profile(user_id: int, data: str) -> None:
+    sql = """INSERT INTO profiles (user_id, data, updated_at) VALUES (?, ?, ?)
+             ON CONFLICT (user_id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at"""
+    with connect() as conn:
+        _run(conn, sql, (user_id, data, _now()))
+
+
+def get_profile(user_id: int) -> Optional[str]:
+    with connect() as conn:
+        row = _fetchone(conn, "SELECT data FROM profiles WHERE user_id = ?", (user_id,))
+        return row["data"] if row else None
+
+
+# --- what each run returned, and what users made of it -----------------------------
+def save_run_results(run_id: int, kind: str, rows: list[tuple[str, int, int | None, str, str, str]]) -> None:
+    """rows of (item_key, rank, fit_score, features_json, url, title)."""
+    with connect() as conn:
+        _many(conn, "INSERT INTO run_results (run_id, kind, item_key, rank, fit_score, features, url, title) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (run_id, item_key) DO NOTHING",
+              [(run_id, kind, *r) for r in rows])
+
+
+def get_run_result(run_id: int, item_key: str) -> Optional[Row]:
+    with connect() as conn:
+        return _fetchone(conn, "SELECT * FROM run_results WHERE run_id = ? AND item_key = ?",
+                         (run_id, item_key))
+
+
+def run_owner(run_id: int) -> Optional[int]:
+    with connect() as conn:
+        row = _fetchone(conn, "SELECT user_id FROM runs WHERE id = ?", (run_id,))
+        return int(row["user_id"]) if row else None
+
+
+FEEDBACK_FIELDS = ("rating", "applied", "messaged", "replied")
+
+
+def upsert_feedback(user_id: int, kind: str, item_key: str, changes: dict,
+                    run_id: int | None, fit_score: int | None, features: str,
+                    url: str, title: str) -> Row:
+    """Merge one change (a thumb, a checkbox) into the user's feedback on an item."""
+    now = _now()
+    with connect() as conn:
+        _run(conn, "INSERT INTO feedback (user_id, kind, item_key, run_id, fit_score, features, url, "
+                   "title, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                   "ON CONFLICT (user_id, kind, item_key) DO NOTHING",
+             (user_id, kind, item_key, run_id, fit_score, features, url[:600], title[:200], now, now))
+        for name in FEEDBACK_FIELDS:
+            if name in changes:
+                _run(conn, f"UPDATE feedback SET {name} = ?, updated_at = ? "
+                           f"WHERE user_id = ? AND kind = ? AND item_key = ?",
+                     (int(changes[name]), now, user_id, kind, item_key))
+        return _fetchone(conn, "SELECT * FROM feedback WHERE user_id = ? AND kind = ? AND item_key = ?",
+                         (user_id, kind, item_key))
+
+
+def feedback_for(user_id: int, kind: str, keys: list[str]) -> dict[str, Row]:
+    if not keys:
+        return {}
+    with connect() as conn:
+        rows = _fetchall(conn, f"SELECT * FROM feedback WHERE user_id = ? AND kind = ? "
+                               f"AND item_key IN ({_marks(len(keys))})", (user_id, kind, *keys))
+    return {r["item_key"]: r for r in rows}
+
+
+def labeled_feedback(kind: str) -> list[Row]:
+    """Every item a user has judged: a thumb either way, or an action taken on it."""
+    with connect() as conn:
+        return _fetchall(conn, "SELECT * FROM feedback WHERE kind = ? AND (rating <> 0 OR applied = 1 "
+                               "OR messaged = 1 OR replied = 1)", (kind,))
+
+
+def results_for_runs(run_ids: list[int]) -> list[Row]:
+    if not run_ids:
+        return []
+    with connect() as conn:
+        return _fetchall(conn, f"SELECT * FROM run_results WHERE run_id IN ({_marks(len(run_ids))}) "
+                               f"ORDER BY run_id, rank", tuple(run_ids))
+
+
+# --- cost per run ------------------------------------------------------------------
+def record_cost(run_id: int, user_id: int, kind: str, summary: dict) -> None:
+    cols = ("serper_calls", "board_requests", "llm_calls", "prompt_tokens", "completion_tokens",
+            "embed_tokens", "cost_usd", "duration_ms")
+    with connect() as conn:
+        _run(conn, f"INSERT INTO run_costs (run_id, user_id, kind, created_at, {', '.join(cols)}) "
+                   f"VALUES (?, ?, ?, ?, {_marks(len(cols))}) ON CONFLICT (run_id) DO NOTHING",
+             (run_id, user_id, kind, _now(), *(summary.get(c, 0) for c in cols)))
+
+
+def cost_stats(since: str) -> list[Row]:
+    with connect() as conn:
+        return _fetchall(conn, """
+            SELECT kind, COUNT(*) AS runs, AVG(cost_usd) AS avg_cost, SUM(cost_usd) AS total_cost,
+                   AVG(serper_calls) AS avg_serper, AVG(prompt_tokens + completion_tokens) AS avg_tokens,
+                   AVG(embed_tokens) AS avg_embed_tokens, AVG(duration_ms) AS avg_ms
+            FROM run_costs WHERE created_at >= ? GROUP BY kind""", (since,))
+
+
+# --- learned ranking weights ----------------------------------------------------------
+def save_weights(kind: str, weights: str, n_labels: int, metric: float | None) -> None:
+    with connect() as conn:
+        _run(conn, "INSERT INTO model_weights (kind, weights, n_labels, metric, created_at) "
+                   "VALUES (?, ?, ?, ?, ?)", (kind, weights, n_labels, metric, _now()))
+
+
+def latest_weights(kind: str) -> Optional[Row]:
+    with connect() as conn:
+        return _fetchone(conn, "SELECT * FROM model_weights WHERE kind = ? ORDER BY id DESC LIMIT 1", (kind,))
+
+
+# --- saved searches and alerts -----------------------------------------------------------
+def create_saved_search(user_id: int, name: str, profile: str, roles: str, companies: str,
+                        min_score: int, embedding: str | None) -> int:
+    sql = ("INSERT INTO saved_searches (user_id, name, profile, roles, companies, min_score, embedding, "
+           "created_at, last_checked) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    now = _now()
+    params = (user_id, name[:120], profile, roles, companies, min_score, embedding, now, now)
+    with connect() as conn:
+        if IS_POSTGRES:
+            return int(_fetchone(conn, sql + " RETURNING id", params)["id"])
+        return int(conn.execute(sql, params).lastrowid)
+
+
+def saved_searches(user_id: int | None = None) -> list[Row]:
+    with connect() as conn:
+        if user_id is None:
+            return _fetchall(conn, "SELECT * FROM saved_searches ORDER BY id")
+        return _fetchall(conn, "SELECT * FROM saved_searches WHERE user_id = ? ORDER BY id", (user_id,))
+
+
+def delete_saved_search(user_id: int, search_id: int) -> int:
+    with connect() as conn:
+        _run(conn, "DELETE FROM alerts WHERE search_id = ? AND user_id = ?", (search_id, user_id))
+        return _run(conn, "DELETE FROM saved_searches WHERE id = ? AND user_id = ?", (search_id, user_id))
+
+
+def touch_saved_search(search_id: int, checked_at: str) -> None:
+    with connect() as conn:
+        _run(conn, "UPDATE saved_searches SET last_checked = ? WHERE id = ?", (checked_at, search_id))
+
+
+def add_alerts(rows: list[tuple[int, int, str, int]]) -> None:
+    """rows of (user_id, search_id, posting_key, score). Repeats are ignored."""
+    now = _now()
+    with connect() as conn:
+        _many(conn, "INSERT INTO alerts (user_id, search_id, posting_key, score, created_at) "
+                    "VALUES (?, ?, ?, ?, ?) ON CONFLICT (search_id, posting_key) DO NOTHING",
+              [(*r, now) for r in rows])
+
+
+def alerts_for(user_id: int, limit: int = 100) -> list[Row]:
+    with connect() as conn:
+        return _fetchall(conn, """
+            SELECT a.id, a.search_id, a.posting_key, a.score, a.created_at, a.seen,
+                   s.name AS search_name, p.title, p.company, p.url, p.apply_url, p.location,
+                   p.posted_at, p.first_seen, p.closed_at
+            FROM alerts a
+            JOIN saved_searches s ON s.id = a.search_id
+            JOIN postings p ON p.key = a.posting_key
+            WHERE a.user_id = ? ORDER BY a.seen, a.created_at DESC, a.score DESC LIMIT ?""",
+                         (user_id, limit))
+
+
+def mark_alerts_seen(user_id: int) -> int:
+    with connect() as conn:
+        return _run(conn, "UPDATE alerts SET seen = 1 WHERE user_id = ? AND seen = 0", (user_id,))
+
+
+def search_open_postings(terms: list[str], exclude_boards: list[tuple[str, str]] = (),
+                         limit: int = 600) -> list[Row]:
+    """Open postings on any known board whose title contains one of these terms.
+
+    This is what makes the daily poll pay off for runs without a company list:
+    every board anyone has searched becomes part of a shared, fresh index.
+    """
+    terms = [t.strip().lower() for t in terms if t and len(t.strip()) >= 3][:12]
+    if not terms:
+        return []
+    like = " OR ".join("LOWER(title) LIKE ?" for _ in terms)
+    params: list = [f"%{t}%" for t in terms]
+    skip = ""
+    if exclude_boards:
+        skip = " AND NOT (" + " OR ".join("(ats = ? AND slug = ?)" for _ in exclude_boards) + ")"
+        for ats, slug in exclude_boards:
+            params += [ats, slug]
+    sql = (f"SELECT * FROM postings WHERE closed_at IS NULL AND ({like}){skip} "
+           f"ORDER BY first_seen DESC LIMIT ?")
+    with connect() as conn:
+        return _fetchall(conn, sql, (*params, limit))
+
+
+def recent_run_ids(kind: str, limit: int = 20, user_id: int | None = None) -> list[int]:
+    sql = "SELECT DISTINCT run_id FROM run_results WHERE kind = ?"
+    params: tuple = (kind,)
+    if user_id is not None:
+        sql += " AND run_id IN (SELECT id FROM runs WHERE user_id = ?)"
+        params += (user_id,)
+    sql += " ORDER BY run_id DESC LIMIT ?"
+    with connect() as conn:
+        return [int(r["run_id"]) for r in _fetchall(conn, sql, (*params, limit))]

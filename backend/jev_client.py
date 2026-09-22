@@ -203,3 +203,81 @@ async def score_candidates(
     # Highest score first; unscored candidates sink to the bottom.
     ordered = sorted(scored, key=lambda s: (s.fit_score is None, -(s.fit_score or 0), s.name))
     return ordered, warnings
+
+
+# --- openings: narrow typed questions on the full posting ------------------------
+_OPENING_QUESTIONS = [
+    {
+        "name": "must_haves_met",
+        "type": "boolean",
+        "question": ("Does the candidate meet every REQUIRED qualification in this posting "
+                     "(degree, years of experience, must-have skills, eligibility)? Ignore "
+                     "nice-to-have items."),
+    },
+    {
+        "name": "level_fit",
+        "type": "enum",
+        "values": ["under", "fit", "over"],
+        "question": ("Relative to the level this posting hires for, is the candidate under-"
+                     "qualified, a fit, or over-qualified?"),
+    },
+]
+
+
+async def _ask(client: httpx.AsyncClient, context: str, questions: list[dict],
+               semaphore: asyncio.Semaphore) -> dict[str, Any]:
+    async with semaphore:
+        resp = await client.post(
+            f"{TYPESAFE_BASE_URL}{SYSTEM_ONE_PATH}",
+            headers={"Authorization": f"Bearer {TYPESAFE_API_KEY}", "Content-Type": "application/json"},
+            json={"context": context, "questions": questions},
+        )
+    if resp.status_code >= 400:
+        raise RuntimeError(f"Jev returned HTTP {resp.status_code}")
+    return _extract_answers(resp.json())
+
+
+def _as_enum(answer: Any, allowed: tuple[str, ...]) -> str | None:
+    if isinstance(answer, str):
+        value = answer.strip().lower()
+        return value if value in allowed else None
+    if isinstance(answer, dict):
+        for key in ("value", "answer", "label", "choice"):
+            if key in answer:
+                return _as_enum(answer[key], allowed)
+    return None
+
+
+async def review_openings(openings: list, profile_text: str, resume: str) -> list[str]:
+    """Answer must_haves_met and level_fit for each opening, in place. Returns warnings.
+
+    Jev answers typed questions only, so the skill lists stay the deterministic
+    overlap computed in ranking.finalize.
+    """
+    semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
+    failures = 0
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        async def one(o) -> None:
+            nonlocal failures
+            context = (f"### Candidate\n{profile_text}\n\n### Resume\n{resume.strip()[:5000]}\n\n"
+                       f"### Posting: {o.title} at {o.company}\n{(o.description or o.snippet)[:5000]}")
+            try:
+                answers = await _ask(client, context, _OPENING_QUESTIONS, semaphore)
+            except Exception:
+                failures += 1
+                return
+            must = _as_probability(answers.get("must_haves_met"))
+            level = _as_enum(answers.get("level_fit"), ("under", "fit", "over"))
+            if must is None and level is None:
+                failures += 1
+                return
+            o.reviewed = True
+            o.must_haves_met = must
+            o.matches_profile = must
+            o.level_fit = level
+
+        await asyncio.gather(*(one(o) for o in openings))
+    if failures:
+        return [f"Jev could not review {failures} of {len(openings)} postings; those are ranked "
+                "by similarity only."]
+    return []

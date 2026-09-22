@@ -1,0 +1,33 @@
+{
+ "total": 1023,
+ "jobPostings": [
+  {
+   "title": "Custom SOC Intern - 2027",
+   "externalPath": "/job/China-Shanghai/Custom-SOC-Intern---2027_JR2024692",
+   "locationsText": "China, Shanghai",
+   "postedOn": "Posted 6 Days Ago",
+   "bulletFields": [
+    "JR2024692"
+   ]
+  },
+  {
+   "title": "Applied Deep Learning PhD Research Intern, Reinforcement Learning for LLMs - Fall 2026",
+   "externalPath": "/job/US-CA-Santa-Clara/Applied-Deep-Learning-PhD-Research-Intern--Reinforcement-Learning-for-LLMs---Fall-2026_JR2012398",
+   "locationsText": "US, CA, Santa Clara",
+   "postedOn": "Posted 30+ Days Ago",
+   "bulletFields": [
+    "JR2012398"
+   ]
+  },
+  {
+   "title": "PhD Software Engineering Intern, Decision Intelligence - Fall 2026",
+   "externalPath": "/job/US-CA-Santa-Clara/PhD-Software-Engineering-Intern--Decision-Intelligence---Fall-2026_JR2017522",
+   "locationsText": "US, CA, Santa Clara",
+   "postedOn": "Posted 30+ Days Ago",
+   "bulletFields": [
+    "JR2017522"
+   ]
+  }
+ ],
+ "userAuthenticated": false
+}

@@ -1,0 +1,96 @@
+{
+ "name": "Hugging Face",
+ "description": "",
+ "jobs": [
+  {
+   "title": "Low-level Senior Software Engineer, Xet Storage - EMEA Remote",
+   "shortcode": "F4C096B22E",
+   "code": "",
+   "employment_type": "Full-time",
+   "telecommuting": true,
+   "department": "Product",
+   "url": "https://apply.workable.com/j/F4C096B22E",
+   "shortlink": "https://apply.workable.com/j/F4C096B22E",
+   "application_url": "https://apply.workable.com/j/F4C096B22E/apply",
+   "published_on": "2026-07-30",
+   "created_at": "2026-07-30",
+   "country": "France",
+   "city": "Paris",
+   "state": "Île-de-France",
+   "education": "Master's Degree",
+   "experience": "Mid-Senior level",
+   "function": "Engineering",
+   "industry": "Computer Software",
+   "locations": [
+    {
+     "country": "France",
+     "countryCode": "FR",
+     "city": "Paris",
+     "region": "Île-de-France",
+     "hidden": true
+    }
+   ],
+   "description": "<p></p><p>At Hugging Face, we're on a journey to democratize good AI. We are building the fastest growing platform for AI builders with over 11 million users who collectively shared over 4 million models, 1 million datasets &amp; 1.5 million Gradio apps. Our open-source libraries have more than 700,000 stars on Github.</p><p></p><p><strong>About the Role</strong></p><p>Roles at Hugging Face are very fluid and dynamic -- we're looking for someone who is comfortable taking on different challenges that evolve over time. This role sits on the <a href=\"https://huggingface.co/docs/hub/xet/index\" rel=\"nofollow noreferrer noopener\" class=\"external\">Xet Storage</a> team, the group responsible for the storage system behind all of Hugging Face. Today we store over 200PB (and growing rapidly!) of the world's most important ML &amp; AI assets. Xet is the underlying storage architecture for the entire Hugging Face platform and community -- from the largest model repositories to the datasets and Spaces that millions of people build on every day.</p><p></p><p>In this role, you'll work across two closely connected surfaces. You'll contribute to <a href=\"https://github.com/huggingface/xet-core\" rel=\"nofollow noreferrer noopener\" class=\"external\">xet-core</a>, our open-source project written in Rust that powers <a href=\"https://pypi.org/project/hf-xet/\" rel=\"nofollow noreferrer noopener\" class=\"external\">hf-xet</a> -- the Python library underpinning the Hugging Face Hub client and the wider eco"
+  },
+  {
+   "title": "Low-Level Senior Software Engineer, Xet Storage - US Remote",
+   "shortcode": "002470F128",
+   "code": "",
+   "employment_type": "Full-time",
+   "telecommuting": true,
+   "department": "Product",
+   "url": "https://apply.workable.com/j/002470F128",
+   "shortlink": "https://apply.workable.com/j/002470F128",
+   "application_url": "https://apply.workable.com/j/002470F128/apply",
+   "published_on": "2026-07-30",
+   "created_at": "2026-07-30",
+   "country": "United States",
+   "city": "New York",
+   "state": "New York",
+   "education": "Master's Degree",
+   "experience": "Mid-Senior level",
+   "function": "Engineering",
+   "industry": "Computer Software",
+   "locations": [
+    {
+     "country": "United States",
+     "countryCode": "US",
+     "city": "New York",
+     "region": "New York",
+     "hidden": true
+    }
+   ],
+   "description": "<p></p><p>At Hugging Face, we're on a journey to democratize good AI. We are building the fastest growing platform for AI builders with over 11 million users who collectively shared over 4 million models, 1 million datasets &amp; 1.5 million Gradio apps. Our open-source libraries have more than 700,000 stars on Github.</p><p></p><p><strong>About the Role</strong></p><p>Roles at Hugging Face are very fluid and dynamic -- we're looking for someone who is comfortable taking on different challenges that evolve over time. This role sits on the <a href=\"https://huggingface.co/docs/hub/xet/index\" rel=\"nofollow noreferrer noopener\" class=\"external\">Xet Storage</a> team, the group responsible for the storage system behind all of Hugging Face. Today we store over 200PB (and growing rapidly!) of the world's most important ML &amp; AI assets. Xet is the underlying storage architecture for the entire Hugging Face platform and community -- from the largest model repositories to the datasets and Spaces that millions of people build on every day.</p><p></p><p>In this role, you'll work across two closely connected surfaces. You'll contribute to <a href=\"https://github.com/huggingface/xet-core\" rel=\"nofollow noreferrer noopener\" class=\"external\">xet-core</a>, our open-source project written in Rust that powers <a href=\"https://pypi.org/project/hf-xet/\" rel=\"nofollow noreferrer noopener\" class=\"external\">hf-xet</a> -- the Python library underpinning the Hugging Face Hub client and the wider eco"
+  },
+  {
+   "title": "Open-Source Machine Learning Engineer - EMEA Remote",
+   "shortcode": "81B46579FE",
+   "code": "",
+   "employment_type": "Full-time",
+   "telecommuting": true,
+   "department": "Open Source",
+   "url": "https://apply.workable.com/j/81B46579FE",
+   "shortlink": "https://apply.workable.com/j/81B46579FE",
+   "application_url": "https://apply.workable.com/j/81B46579FE/apply",
+   "published_on": "2026-05-29",
+   "created_at": "2026-05-29",
+   "country": "France",
+   "city": "Paris",
+   "state": "Île-de-France",
+   "education": "",
+   "experience": "",
+   "function": "Engineering",
+   "industry": "Computer Software",
+   "locations": [
+    {
+     "country": "France",
+     "countryCode": "FR",
+     "city": "Paris",
+     "region": "Île-de-France",
+     "hidden": false
+    }
+   ],
+   "description": "<p></p><p>At Hugging Face, we're on a journey to democratize good AI. We are building the fastest growing platform for AI builders with over 11 million users who collectively shared over 4 million models, 1 million datasets &amp; 1.5 million Gradio apps. Our open-source libraries have more than 700,000 stars on Github.</p><h3>About the Role</h3><p>As an Open-Source Machine Learning Engineer, you'll work to improve the open-source machine learning ecosystem. You'll mainly work on existing open-source libraries such as Transformers, Datasets, Pytorch and vLLM, and you'll interact with users and contributors across the broad open-source ML ecosystem. We'll brainstorm with you to put you in a position to do the work that interests you and that is impactful.</p><p>You'll help foster one of the most active machine learning communities, helping users contribute to and use the tools you build. You'll work with researchers, ML practitioners, and data scientists every day through GitHub, our forums, and Slack.</p><h3>About You</h3><p>You have a public track record of open-source work, and you enjoy collaborating with a community out in the open on GitHub. You love open source, you're passionate about making complex technology more accessible, and you want to contribute to one of the fastest-growing ML ecosystems. If that's you, we can't wait to see your application.</p><h3>What you'll need</h3><ul><li>Strong Python skills, with experience writing clean, well-tested, maintainable librar"
+  }
+ ]
+}

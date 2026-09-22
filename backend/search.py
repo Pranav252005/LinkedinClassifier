@@ -13,6 +13,7 @@ from urllib.parse import urlparse, urlunparse
 
 import httpx
 
+import meter
 from config import SERPER_API_KEY, SERPER_BASE_URL, SERPER_MAX_RESULTS
 from schemas import Candidate
 
@@ -125,6 +126,7 @@ async def _run_query(
     if page > 1:
         body["page"] = page
 
+    meter.current().serper_calls += 1
     resp = await client.post(
         f"{SERPER_BASE_URL}/search",
         headers={"X-API-KEY": api_key, "Content-Type": "application/json"},

@@ -50,6 +50,21 @@ SCORING_PROVIDER = (_env("SCORING_PROVIDER", "openrouter") or "openrouter").lowe
 # prompt the model has to hold in mind at once.
 SCORING_BATCH_SIZE = _int_env("SCORING_BATCH_SIZE", 10)
 
+# Ranking openings is two-stage: embeddings rank everything that passed the
+# hard filters, then the model reads the full description of the top N only.
+EMBEDDING_MODEL = _env("EMBEDDING_MODEL", "openai/text-embedding-3-small")
+REVIEW_TOP_N = _int_env("REVIEW_TOP_N", 20)
+# Full descriptions are long, so fewer per call than for people.
+REVIEW_BATCH_SIZE = _int_env("REVIEW_BATCH_SIZE", 5)
+# Learned ranking weights replace the defaults only past this many labels.
+MIN_LABELS_FOR_WEIGHTS = _int_env("MIN_LABELS_FOR_WEIGHTS", 200)
+
+# A board read within this many hours is served from the database instead of
+# fetched again; the daily poll keeps known boards inside the window.
+BOARD_FRESH_HOURS = _int_env("BOARD_FRESH_HOURS", 6)
+# Companies read per openings run (each is one or more board requests).
+MAX_BOARDS_PER_RUN = _int_env("MAX_BOARDS_PER_RUN", 25)
+
 # --- app ---------------------------------------------------------------------
 SECRET_KEY = _env("SECRET_KEY", "dev-only-insecure-key-change-me")
 # Postgres connection string (Neon, or any Postgres). When set it wins; when
@@ -84,6 +99,11 @@ COMP_ACCOUNTS = frozenset(
 FREE_RUNS_PER_MONTH = _int_env("FREE_RUNS_PER_MONTH", 3)
 PRO_RUNS_PER_MONTH = _int_env("PRO_RUNS_PER_MONTH", 250)
 PRO_PRICE_LABEL = _env("PRO_PRICE_LABEL", "$5/mo")
+# Saved searches that alert on new postings, per plan.
+FREE_SAVED_SEARCHES = _int_env("FREE_SAVED_SEARCHES", 1)
+PRO_SAVED_SEARCHES = _int_env("PRO_SAVED_SEARCHES", 10)
+# The daily poller authenticates with this when triggered over HTTP.
+POLL_TOKEN = _env("POLL_TOKEN")
 
 # --- stripe ------------------------------------------------------------------
 STRIPE_SECRET_KEY = _env("STRIPE_SECRET_KEY")
@@ -115,3 +135,7 @@ def is_comp_account(email: str) -> bool:
 
 def runs_allowed(plan: str) -> int:
     return PRO_RUNS_PER_MONTH if plan == "pro" else FREE_RUNS_PER_MONTH
+
+
+def saved_searches_allowed(plan: str) -> int:
+    return PRO_SAVED_SEARCHES if plan == "pro" else FREE_SAVED_SEARCHES

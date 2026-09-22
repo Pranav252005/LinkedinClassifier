@@ -12,6 +12,7 @@ from typing import Any
 
 import httpx
 
+import meter
 from config import (
     OPENROUTER_API_KEY,
     OPENROUTER_BASE_URL,
@@ -51,6 +52,8 @@ async def chat(
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
+        # Ask OpenRouter to report what the call cost, so runs can be priced.
+        "usage": {"include": True},
     }
     try:
         async with httpx.AsyncClient(timeout=90.0) as client:
@@ -71,6 +74,7 @@ async def chat(
 
     try:
         data = resp.json()
+        meter.current().llm(data.get("usage"))
         return (data["choices"][0]["message"]["content"] or "").strip()
     except (ValueError, KeyError, IndexError, TypeError) as exc:
         raise OpenRouterError(f"Unexpected OpenRouter response shape: {exc}") from exc
@@ -113,3 +117,32 @@ async def read_image(data_url: str, instruction: str) -> str:
         max_tokens=3000,
         temperature=0.0,
     )
+
+
+async def embed(texts: list[str], model: str) -> list[list[float]]:
+    """Embed a batch of texts. One vector per input, in input order."""
+    if not texts:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                f"{OPENROUTER_BASE_URL}/embeddings",
+                headers=_headers(),
+                json={"model": model, "input": texts},
+            )
+    except httpx.HTTPError as exc:
+        raise OpenRouterError(f"OpenRouter embeddings request failed: {exc}") from exc
+    if resp.status_code == 402:
+        raise OpenRouterError("OpenRouter credits exhausted.")
+    if resp.status_code >= 400:
+        raise OpenRouterError(f"OpenRouter embeddings returned HTTP {resp.status_code}: {resp.text[:200]}")
+    try:
+        data = resp.json()
+        rows = sorted(data["data"], key=lambda r: r.get("index", 0))
+        vectors = [list(map(float, r["embedding"])) for r in rows]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise OpenRouterError(f"Unexpected embeddings response shape: {exc}") from exc
+    if len(vectors) != len(texts):
+        raise OpenRouterError("Embeddings response did not match the inputs.")
+    meter.current().embed(data.get("usage"))
+    return vectors

@@ -35,9 +35,10 @@ JOB_RULES = """Rules:
   Not the titles of people to contact.
 - Match the seeker's actual level. A student wants intern and new-grad postings,
   not staff or principal ones.
-- Leave "companies" empty unless the seeker named some or a company is an
-  unusually strong fit — searching every board without a company filter finds
-  more openings, not fewer.
+- Suggest companies that genuinely hire this profile at this level, in or open
+  to the seeker's locations. Openings are read from each company's own job
+  board, so prefer companies with a real hiring programme for this level over
+  famous names that rarely hire it. Mix large employers with strong startups.
 - No commentary outside the JSON."""
 
 PEOPLE_RULES = """Rules:
@@ -50,7 +51,7 @@ PEOPLE_RULES = """Rules:
 
 
 def _prompt(resume: str, companies: list[str], titles: list[str], role: str,
-            for_jobs: bool = False) -> str:
+            for_jobs: bool = False, profile_text: str = "") -> str:
     goal = ("build a plan for finding job openings they should apply to"
             if for_jobs else
             "build a plan for finding people worth reaching out to")
@@ -58,6 +59,9 @@ def _prompt(resume: str, companies: list[str], titles: list[str], role: str,
 
 ### Resume
 {resume.strip()[:8000]}
+
+### Structured profile (confirmed by the seeker — trust it over the resume)
+{profile_text.strip() or "(none)"}
 
 ### Stated target role
 {role.strip() or "(not stated — infer it from the resume)"}
@@ -125,7 +129,7 @@ def fallback_plan(companies: list[str], titles: list[str], role: str) -> SearchP
 
 async def plan_search(
     resume: str, companies: list[str], titles: list[str], role: str = "",
-    for_jobs: bool = False,
+    for_jobs: bool = False, profile_text: str = "",
 ) -> tuple[SearchPlan, list[str]]:
     """Return (plan, warnings). Never raises — falls back to the user's own input."""
     companies = [c.strip() for c in companies if c.strip()]
@@ -135,7 +139,7 @@ async def plan_search(
         raw = await chat(
             messages=[
                 {"role": "system", "content": SYSTEM},
-                {"role": "user", "content": _prompt(resume, companies, titles, role, for_jobs)},
+                {"role": "user", "content": _prompt(resume, companies, titles, role, for_jobs, profile_text)},
             ],
             max_tokens=900,
         )

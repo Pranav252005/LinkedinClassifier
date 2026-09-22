@@ -152,6 +152,52 @@
   summary { cursor: pointer; color: var(--ink-faint); font-size: 12px; }
   details div { font-size: 11.5px; color: var(--ink-faint); margin-top: 9px;
                 word-break: break-all; line-height: 2; }
+
+  /* profile editor */
+  .profile { border: 1px solid var(--line-soft); border-radius: 4px; padding: 12px; margin: 4px 0 16px;
+             background: var(--bg-lift); }
+  .profile-head { display: flex; justify-content: space-between; align-items: center; gap: 8px;
+                  margin-bottom: 8px; }
+  .profile-head strong { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-dim); }
+  .profile-summary { font-size: 12px; color: var(--ink-dim); margin: 0 0 10px; }
+  .chipbox { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; padding: 5px;
+             border: 1px solid var(--line); border-radius: 3px; min-height: 34px; }
+  .chipbox input { flex: 1; min-width: 90px; border: 0; background: transparent; padding: 3px; }
+  .chipbox input:focus { outline: none; }
+  .tag { font-size: 11px; padding: 2px 4px 2px 8px; border-radius: 3px; border: 1px solid var(--line);
+         display: inline-flex; align-items: center; gap: 4px; }
+  .tag button { background: none; border: 0; color: var(--ink-faint); cursor: pointer; font: inherit; padding: 0 3px; }
+  .tag button:hover { color: var(--danger); }
+  .profile .field { margin-bottom: 10px; }
+  .checks { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--ink-dim); margin-bottom: 10px; }
+  .checks label { display: flex; gap: 6px; align-items: center; }
+  .checks input { width: auto; accent-color: var(--accent); }
+
+  /* result reasons and feedback */
+  .reasons { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; }
+  .reasons .ok { color: var(--high); } .reasons .miss { color: var(--med); }
+  .reasons .lbl { color: var(--ink-faint); }
+  .badge.live { border-color: rgba(53,176,106,.45); color: var(--high); }
+  .badge.web { border-color: rgba(184,132,42,.45); color: var(--med); }
+  .badge.quick { border-style: dashed; }
+  .badge.alum { border-color: var(--accent); color: var(--accent); }
+  .timing { font-size: 11.5px; color: var(--ink-faint); }
+  .fb { display: inline-flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+  .fb button { font: 500 11px/1 var(--mono); padding: 4px 7px; border-radius: 3px; cursor: pointer;
+               border: 1px solid var(--line-soft); background: transparent; color: var(--ink-faint); }
+  .fb button:hover { color: var(--ink); border-color: var(--line); }
+  .fb button.on { color: var(--accent); border-color: var(--accent); }
+  .opening-foot { flex-wrap: wrap; }
+  .people-list { display: grid; gap: 8px; margin-top: 12px; }
+  .person { border: 1px solid var(--line-soft); border-radius: 4px; padding: 10px 12px; display: grid; gap: 4px; }
+  .person-top { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+  .alerts-btn .count { background: var(--accent); color: #fff; border-radius: 8px; padding: 0 6px;
+                       font-size: 10.5px; margin-left: 4px; }
+  .alert-row { display: grid; grid-template-columns: 46px 1fr auto; gap: 12px; align-items: center;
+               padding: 10px 14px; border-bottom: 1px solid var(--line-soft); background: var(--bg-card); }
+  .alert-row.new { box-shadow: inset 2px 0 0 var(--accent); }
+  .saved { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; padding: 6px 0;
+           border-bottom: 1px solid var(--line-soft); }
 </style>
 </head>
 <body>
@@ -162,6 +208,7 @@
     <span id="email"></span>
     <span class="pill" id="plan">…</span>
     <span id="quota"></span>
+    <button class="linkish alerts-btn" id="alertsBtn" type="button">Alerts<span class="count" id="alertCount" hidden>0</span></button>
     <button class="linkish" id="upgrade" hidden>Upgrade · <span id="priceLabel">$5/mo</span></button>
     <button class="linkish" id="manage" hidden>Manage billing</button>
     <button class="linkish" id="logout">Sign out</button>
@@ -196,6 +243,42 @@
           <textarea id="resume" placeholder="Education, experience, projects, skills…" required></textarea>
         </label>
 
+        <div class="profile" id="profileBox">
+          <div class="profile-head">
+            <strong>Your profile</strong>
+            <button type="button" class="btn ghost approach" id="readProfile">Read from resume</button>
+          </div>
+          <p class="profile-summary" id="profileSummary">Read once from your resume, then edit anything
+            it got wrong. Openings are filtered against these fields before anything is ranked.</p>
+          <div id="profileFields" hidden>
+            <label class="field"><span>Roles to apply for</span><div class="chipbox" data-list="target_roles"></div></label>
+            <div class="two">
+              <label class="field"><span>Level</span>
+                <select id="pSeniority">
+                  <option value="intern">Student / intern</option>
+                  <option value="new_grad">New grad</option>
+                  <option value="junior">Junior (1–2 yrs)</option>
+                  <option value="mid">Mid (3–5 yrs)</option>
+                  <option value="senior">Senior (6+ yrs)</option>
+                </select>
+              </label>
+              <label class="field"><span>Years full-time</span><input id="pYears" type="number" min="0" max="50" step="0.5" value="0"></label>
+            </div>
+            <div class="checks">
+              <label><input type="checkbox" id="pIntern"> Internships</label>
+              <label><input type="checkbox" id="pFull"> Full-time</label>
+              <label><input type="checkbox" id="pRemote"> Open to remote</label>
+              <label><input type="checkbox" id="pSponsor"> Needs visa sponsorship</label>
+            </div>
+            <label class="field"><span>Skills</span><div class="chipbox" data-list="skills"></div></label>
+            <label class="field"><span>Locations <span class="opt">empty = anywhere</span></span><div class="chipbox" data-list="locations"></div></label>
+            <div class="two">
+              <label class="field"><span>College</span><input id="pCollege" placeholder="IIT Delhi"></label>
+              <label class="field"><span>Graduation year</span><input id="pGrad" type="number" min="1970" max="2100"></label>
+            </div>
+          </div>
+        </div>
+
         <label class="field">
           <span>Role you're targeting <span class="opt">optional</span></span>
           <input id="role" placeholder="Summer 2027 SWE internship">
@@ -216,6 +299,12 @@
           <input type="checkbox" id="freshOnly" checked>
           <span>Only show me results I haven't been shown before — repeat runs dig into
                 deeper pages instead of returning the same names.</span>
+        </label>
+
+        <label class="toggle" id="olderToggle">
+          <input type="checkbox" id="includeOlder">
+          <span>Include older postings — web results past 30 days and board postings
+                past 120. Older roles are usually filled.</span>
         </label>
 
         <label class="toggle">
@@ -243,22 +332,22 @@
   <section>
     <div id="progress" hidden>
       <div class="stages card">
-        <div class="stage" data-stage="plan"><span class="bullet"></span> Agent planning</div>
-        <div class="stage" data-stage="source"><span class="bullet"></span> Searching job boards</div>
-        <div class="stage" data-stage="score"><span class="bullet"></span> Jev scoring</div>
+        <div class="stage" data-stage="plan"><span class="bullet"></span> Reading your profile &amp; planning</div>
+        <div class="stage" data-stage="source"><span class="bullet"></span> Reading job boards</div>
+        <div class="stage" data-stage="score"><span class="bullet"></span> Filtering &amp; ranking</div>
       </div>
     </div>
 
     <div id="out">
       <div class="empty">
         <strong>No run yet</strong>
-        <p>Add your resume on the left and hit run. Results land here ranked by fit,
-           highest first, with a CSV export.</p>
+        <p>Add your resume on the left, check your profile, and hit run. Results land here
+           ranked by fit, each with the reasons it ranked where it did.</p>
       </div>
     </div>
   </section>
 </main>
 
-<script src="/static/app.js?v=2"></script>
+<script src="/static/app.js?v=3"></script>
 </body>
 </html>

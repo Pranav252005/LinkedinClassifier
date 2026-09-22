@@ -1,0 +1,364 @@
+{
+ "offset": 0,
+ "limit": 3,
+ "totalFound": 298,
+ "content": [
+  {
+   "id": "744000151103220",
+   "name": "Expert Technical Artist - Shader  (F/H/NB) ",
+   "uuid": "1aed9c28-3432-4498-852d-7c1b26286fc8",
+   "jobAdId": "f06f3eb4-c29d-42fd-929b-b6998f4d62e2",
+   "defaultJobAd": true,
+   "refNumber": "REF31464G",
+   "company": {
+    "identifier": "Ubisoft2",
+    "name": "Ubisoft"
+   },
+   "releasedDate": "2026-09-22T17:49:45.760Z",
+   "location": {
+    "city": "Annecy",
+    "region": "Auvergne-Rhône-Alpes",
+    "country": "fr",
+    "remote": false,
+    "hybrid": false,
+    "latitude": "45.9058956",
+    "longitude": "6.1259117",
+    "fullLocation": "Annecy, Auvergne-Rhône-Alpes, France"
+   },
+   "industry": {
+    "id": "entertainment",
+    "label": "Entertainment"
+   },
+   "department": {
+    "id": "13847731",
+    "label": "Ubisoft"
+   },
+   "function": {
+    "id": "art_creative",
+    "label": "Art/Creative"
+   },
+   "typeOfEmployment": {
+    "id": "permanent",
+    "label": "Full-time"
+   },
+   "experienceLevel": {
+    "id": "mid_senior_level",
+    "label": "Mid-Senior Level"
+   },
+   "customField": [
+    {
+     "fieldId": "56c253c2e4b0cabf01d19d37",
+     "fieldLabel": "Organizational Unit",
+     "valueId": "432993ab-6da4-49ff-9ad6-0a04b18fa0d7",
+     "valueLabel": "Annecy studio"
+    },
+    {
+     "fieldId": "5bb3995c6d8bc56bc081b87d",
+     "fieldLabel": "Contract",
+     "valueId": "b5a86fc0-2681-4b3c-98b6-b73a4be23ef1",
+     "valueLabel": "Permanent"
+    },
+    {
+     "fieldId": "68e4ce369c52964c7125078a",
+     "fieldLabel": "Job Family",
+     "valueId": "f0fbddbb-5538-41ec-a9ea-849548505b2d",
+     "valueLabel": "Art"
+    },
+    {
+     "fieldId": "56d1aa7ae4b0a07f777a4ef4",
+     "fieldLabel": "Brands",
+     "valueId": "default",
+     "valueLabel": "Ubisoft"
+    },
+    {
+     "fieldId": "6904811aa8fa2db78e2ee2ed",
+     "fieldLabel": "Job  Function",
+     "valueId": "674ad512-f55c-43e8-8d3f-8bffaaec02b2",
+     "valueLabel": "Technical Art"
+    },
+    {
+     "fieldId": "691ca2ee342dfb96e5364508",
+     "fieldLabel": "Reference Job",
+     "valueId": "31878a71-481a-41ab-8706-d2e36a60b849",
+     "valueLabel": "Technical Artist"
+    },
+    {
+     "fieldId": "6a158e3c77b1f5657b57af9d",
+     "fieldLabel": "Management Unit (New)",
+     "valueId": "36d02bfd-569a-4aef-9905-8679f578380c",
+     "valueLabel": "CREATIVE NETWORK"
+    },
+    {
+     "fieldId": "58b7e4d0e4b09a6d37a0cd8b",
+     "fieldLabel": "Department",
+     "valueId": "13847731",
+     "valueLabel": "Ubisoft"
+    },
+    {
+     "fieldId": "COUNTRY",
+     "fieldLabel": "Country/Region",
+     "valueId": "fr",
+     "valueLabel": "France"
+    },
+    {
+     "fieldId": "6904797c56f594d5ed50988d",
+     "fieldLabel": "Work flexibility",
+     "valueId": "ccb10278-8410-4710-b0e7-698fc2195139",
+     "valueLabel": "Office-based"
+    },
+    {
+     "fieldId": "5def94650389ad3cc4be9d17",
+     "fieldLabel": "OU sub location (select when applicable)",
+     "valueId": "ac8ae7ad-70a6-491d-b848-4625c10b9609",
+     "valueLabel": "N/A"
+    }
+   ],
+   "visibility": "PUBLIC",
+   "ref": "https://api.smartrecruiters.com/v1/companies/Ubisoft2/postings/744000151103220",
+   "creator": {
+    "name": "Anna Konwinski"
+   },
+   "language": {
+    "code": "en",
+    "label": "English",
+    "labelNative": "English (US)"
+   }
+  },
+  {
+   "id": "744000151078437",
+   "name": "Online Programmer (Online Services - Player Identity)",
+   "uuid": "7e567a57-cd27-4345-b17e-84fc5ce100c3",
+   "jobAdId": "d275ab67-2cb4-497c-a46c-8f6bff54a309",
+   "defaultJobAd": false,
+   "refNumber": "REF31371N",
+   "company": {
+    "identifier": "Ubisoft2",
+    "name": "Ubisoft"
+   },
+   "releasedDate": "2026-09-22T15:48:36.007Z",
+   "location": {
+    "city": "Montreal",
+    "region": "QC",
+    "country": "ca",
+    "remote": false,
+    "hybrid": false,
+    "latitude": "45.5018869",
+    "longitude": "-73.56739189999999",
+    "fullLocation": "Montreal, QC, Canada"
+   },
+   "industry": {
+    "id": "it_and_services",
+    "label": "Information Technology And Services"
+   },
+   "department": {
+    "id": "13847731",
+    "label": "Ubisoft"
+   },
+   "function": {
+    "id": "engineering",
+    "label": "Engineering"
+   },
+   "typeOfEmployment": {
+    "id": "permanent",
+    "label": "Full-time"
+   },
+   "experienceLevel": {
+    "id": "not_applicable",
+    "label": "Not Applicable"
+   },
+   "customField": [
+    {
+     "fieldId": "56c253c2e4b0cabf01d19d37",
+     "fieldLabel": "Organizational Unit",
+     "valueId": "53d04f9b-84ad-40af-aa53-d109d5ec51ae",
+     "valueLabel": "International HQ"
+    },
+    {
+     "fieldId": "5bb3995c6d8bc56bc081b87d",
+     "fieldLabel": "Contract",
+     "valueId": "b5a86fc0-2681-4b3c-98b6-b73a4be23ef1",
+     "valueLabel": "Permanent"
+    },
+    {
+     "fieldId": "68e4ce369c52964c7125078a",
+     "fieldLabel": "Job Family",
+     "valueId": "43fccb43-cd89-4548-ab8b-24ab8e79edec",
+     "valueLabel": "Software Development"
+    },
+    {
+     "fieldId": "56d1aa7ae4b0a07f777a4ef4",
+     "fieldLabel": "Brands",
+     "valueId": "default",
+     "valueLabel": "Ubisoft"
+    },
+    {
+     "fieldId": "6904811aa8fa2db78e2ee2ed",
+     "fieldLabel": "Job  Function",
+     "valueId": "00698f79-7c89-487d-96db-9b54fd7e350a",
+     "valueLabel": "Software Development Online"
+    },
+    {
+     "fieldId": "691ca2ee342dfb96e5364508",
+     "fieldLabel": "Reference Job",
+     "valueId": "fb698978-f4ae-489f-a035-42088e571f26",
+     "valueLabel": "Software Developer Online Full stack"
+    },
+    {
+     "fieldId": "6a158e3c77b1f5657b57af9d",
+     "fieldLabel": "Management Unit (New)",
+     "valueId": "f0bd3708-c5ff-47b1-9104-b83a1b4071d2",
+     "valueLabel": "UBISOFT"
+    },
+    {
+     "fieldId": "58b7e4d0e4b09a6d37a0cd8b",
+     "fieldLabel": "Department",
+     "valueId": "13847731",
+     "valueLabel": "Ubisoft"
+    },
+    {
+     "fieldId": "COUNTRY",
+     "fieldLabel": "Country/Region",
+     "valueId": "ca",
+     "valueLabel": "Canada"
+    },
+    {
+     "fieldId": "6904797c56f594d5ed50988d",
+     "fieldLabel": "Work flexibility",
+     "valueId": "ccb10278-8410-4710-b0e7-698fc2195139",
+     "valueLabel": "Office-based"
+    },
+    {
+     "fieldId": "5def94650389ad3cc4be9d17",
+     "fieldLabel": "OU sub location (select when applicable)",
+     "valueId": "8282aec3-a755-4c6d-b27f-88e4344879af",
+     "valueLabel": "Canada"
+    }
+   ],
+   "visibility": "PUBLIC",
+   "ref": "https://api.smartrecruiters.com/v1/companies/Ubisoft2/postings/744000151078437",
+   "language": {
+    "code": "en",
+    "label": "English",
+    "labelNative": "English (US)"
+   }
+  },
+  {
+   "id": "744000151077192",
+   "name": "Programmeuse, Programmeur en ligne (Online services - player identity)",
+   "uuid": "ef645161-100b-4b2e-91a6-c28be465ec8d",
+   "jobAdId": "f806c191-f36e-466e-8c1f-c8f01438afe7",
+   "defaultJobAd": true,
+   "refNumber": "REF31371N",
+   "company": {
+    "identifier": "Ubisoft2",
+    "name": "Ubisoft"
+   },
+   "releasedDate": "2026-09-22T15:47:02.719Z",
+   "location": {
+    "city": "Montreal",
+    "region": "QC",
+    "country": "ca",
+    "remote": false,
+    "hybrid": false,
+    "latitude": "45.5018869",
+    "longitude": "-73.56739189999999",
+    "fullLocation": "Montreal, QC, Canada"
+   },
+   "industry": {
+    "id": "it_and_services",
+    "label": "Information Technology And Services"
+   },
+   "department": {
+    "id": "13847731",
+    "label": "Ubisoft"
+   },
+   "function": {
+    "id": "engineering",
+    "label": "Engineering"
+   },
+   "typeOfEmployment": {
+    "id": "permanent",
+    "label": "Full-time"
+   },
+   "experienceLevel": {
+    "id": "not_applicable",
+    "label": "Not Applicable"
+   },
+   "customField": [
+    {
+     "fieldId": "56c253c2e4b0cabf01d19d37",
+     "fieldLabel": "Organizational Unit",
+     "valueId": "53d04f9b-84ad-40af-aa53-d109d5ec51ae",
+     "valueLabel": "International HQ"
+    },
+    {
+     "fieldId": "5bb3995c6d8bc56bc081b87d",
+     "fieldLabel": "Contract",
+     "valueId": "b5a86fc0-2681-4b3c-98b6-b73a4be23ef1",
+     "valueLabel": "Permanent"
+    },
+    {
+     "fieldId": "68e4ce369c52964c7125078a",
+     "fieldLabel": "Job Family",
+     "valueId": "43fccb43-cd89-4548-ab8b-24ab8e79edec",
+     "valueLabel": "Software Development"
+    },
+    {
+     "fieldId": "56d1aa7ae4b0a07f777a4ef4",
+     "fieldLabel": "Brands",
+     "valueId": "default",
+     "valueLabel": "Ubisoft"
+    },
+    {
+     "fieldId": "6904811aa8fa2db78e2ee2ed",
+     "fieldLabel": "Job  Function",
+     "valueId": "00698f79-7c89-487d-96db-9b54fd7e350a",
+     "valueLabel": "Software Development Online"
+    },
+    {
+     "fieldId": "691ca2ee342dfb96e5364508",
+     "fieldLabel": "Reference Job",
+     "valueId": "fb698978-f4ae-489f-a035-42088e571f26",
+     "valueLabel": "Software Developer Online Full stack"
+    },
+    {
+     "fieldId": "6a158e3c77b1f5657b57af9d",
+     "fieldLabel": "Management Unit (New)",
+     "valueId": "f0bd3708-c5ff-47b1-9104-b83a1b4071d2",
+     "valueLabel": "UBISOFT"
+    },
+    {
+     "fieldId": "58b7e4d0e4b09a6d37a0cd8b",
+     "fieldLabel": "Department",
+     "valueId": "13847731",
+     "valueLabel": "Ubisoft"
+    },
+    {
+     "fieldId": "COUNTRY",
+     "fieldLabel": "Country/Region",
+     "valueId": "ca",
+     "valueLabel": "Canada"
+    },
+    {
+     "fieldId": "6904797c56f594d5ed50988d",
+     "fieldLabel": "Work flexibility",
+     "valueId": "ccb10278-8410-4710-b0e7-698fc2195139",
+     "valueLabel": "Office-based"
+    },
+    {
+     "fieldId": "5def94650389ad3cc4be9d17",
+     "fieldLabel": "OU sub location (select when applicable)",
+     "valueId": "8282aec3-a755-4c6d-b27f-88e4344879af",
+     "valueLabel": "Canada"
+    }
+   ],
+   "visibility": "PUBLIC",
+   "ref": "https://api.smartrecruiters.com/v1/companies/Ubisoft2/postings/744000151077192",
+   "language": {
+    "code": "fr-CA",
+    "label": "French (Canada)",
+    "labelNative": "français (Canada)"
+   }
+  }
+ ]
+}

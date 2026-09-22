@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+import meter
 from config import SERPER_API_KEY, SERPER_BASE_URL, SERPER_MAX_RESULTS
 from schemas import Opening
 from search import SearchError, _serper_message
@@ -35,7 +36,12 @@ SOURCES = [
     ("lever", "jobs.lever.co"),
     ("ashby", "jobs.ashbyhq.com"),
     ("linkedin", "linkedin.com/jobs/view"),
+    # Last resort for companies whose careers site is in-house: no site filter,
+    # so these are liveness-checked before anyone sees them.
+    ("web", ""),
 ]
+# Without an explicit choice, search the ATS boards and LinkedIn as before.
+DEFAULT_SOURCES = ("greenhouse", "lever", "ashby", "linkedin")
 
 # Titles arrive dressed in board branding:
 #   "Software Engineer, Intern - Stripe Careers"
@@ -56,7 +62,14 @@ _SLUG_SUFFIXES = ("unirecruitment", "universityrecruitment", "universityrecruiti
                   "careers", "jobs", "hq", "inc")
 
 
-def build_queries(roles: list[str], companies: list[str], limit: int = 24) -> list[tuple[str, str]]:
+def _query(domain: str, role: str, company: str = "") -> str:
+    if not domain:
+        return f'"{company}" "{role}" careers apply -site:linkedin.com -site:naukri.com -site:indeed.com'
+    return f'site:{domain} "{role}"' + (f' "{company}"' if company else "")
+
+
+def build_queries(roles: list[str], companies: list[str], limit: int = 24,
+                  sources: tuple[str, ...] = DEFAULT_SOURCES) -> list[tuple[str, str]]:
     """(source, query) pairs. Companies are optional — without them this finds
     openings anywhere, which is the point when you do not yet have a shortlist."""
     specs: list[tuple[str, str]] = []
@@ -64,14 +77,16 @@ def build_queries(roles: list[str], companies: list[str], limit: int = 24) -> li
     companies = [c.strip() for c in companies if c.strip()]
 
     for source, domain in SOURCES:
+        if source not in sources or (not domain and not companies):
+            continue
         for role in roles:
             if companies:
                 for company in companies:
-                    specs.append((source, f'site:{domain} "{role}" "{company}"'))
+                    specs.append((source, _query(domain, role, company)))
                     if len(specs) >= limit:
                         return specs
             else:
-                specs.append((source, f'site:{domain} "{role}"'))
+                specs.append((source, _query(domain, role)))
                 if len(specs) >= limit:
                     return specs
     return specs
@@ -138,6 +153,11 @@ def _parse(item: dict, source: str, query: str) -> Opening | None:
     title, from_title = _clean_title(item.get("title") or "", source)
     # A name written out in the title beats a squashed URL slug ("shieldai").
     company = from_title or _company_from(url, title, source)
+    if source == "web":
+        # An unrestricted search was for one named company; trust that over
+        # whatever the page title claims.
+        quoted = re.findall(r'"([^"]+)"', query)
+        company = quoted[0] if quoted else company
     if not title:
         return None
 
@@ -157,6 +177,7 @@ async def _run(client: httpx.AsyncClient, source: str, query: str, num: int,
     if page > 1:                      # page 1 keeps the exact known-good shape
         body["page"] = page
 
+    meter.current().serper_calls += 1
     resp = await client.post(
         f"{SERPER_BASE_URL}/search",
         headers={"X-API-KEY": SERPER_API_KEY, "Content-Type": "application/json"},
@@ -179,6 +200,8 @@ async def find_openings(
     per_query_results: int = 10,
     max_openings: int = 30,
     exclude: frozenset[str] = frozenset(),
+    max_queries: int = 24,
+    sources: tuple[str, ...] = DEFAULT_SOURCES,
 ) -> tuple[list[Opening], list[str], int]:
     """Return (openings, queries actually run, skipped_as_already_seen).
 
@@ -188,7 +211,7 @@ async def find_openings(
     if not SERPER_API_KEY:
         raise SearchError("SERPER_API_KEY is not set — copy .env.example to .env and fill it in.")
 
-    specs = build_queries(roles, companies)
+    specs = build_queries(roles, companies, max_queries, sources)
     if not specs:
         return [], [], 0
 

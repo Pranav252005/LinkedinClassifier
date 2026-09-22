@@ -26,10 +26,33 @@ services:
         sync: false
       - key: COMP_ACCOUNTS
         sync: false
+      - key: POLL_TOKEN          # lets an external cron call POST /api/admin/poll instead
+        sync: false
       # Non-secret configuration.
       - key: PUBLIC_BASE_URL     # your Netlify URL — drives cookie security and Stripe returns
         value: https://CHANGE-ME.netlify.app
       - key: SCORING_PROVIDER
         value: openrouter
+      - key: PYTHON_VERSION
+        value: "3.12"
+
+  # The daily poll: re-read every known job board, close what disappeared,
+  # alert saved searches, and refit ranking weights once enough labels exist
+  # (fit_weights.py is a no-op until then). Needs DATABASE_URL: the web service
+  # and this job must share Postgres, since neither can see the other's disk.
+  # 03:00 UTC is 08:30 in India -- alerts land before the working day.
+  - type: cron
+    name: leadclassifier-poll
+    runtime: python
+    schedule: "0 3 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python scripts/poll_boards.py && python scripts/fit_weights.py
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: SERPER_API_KEY
+        sync: false
       - key: PYTHON_VERSION
         value: "3.12"

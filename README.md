@@ -108,6 +108,7 @@ one cancelled at period end keeps Pro until the period actually ends.
 | --- | --- | --- |
 | Runs per month | 3 | 250 |
 | Max candidates per run | 60 | 200 |
+| Saved searches with daily alerts | 1 | 10 |
 | Everything else | — | same pipeline |
 
 Quotas are per calendar month, counted in SQLite, and tuned by `FREE_RUNS_PER_MONTH` /
@@ -124,6 +125,15 @@ Quotas are per calendar month, counted in SQLite, and tuned by `FREE_RUNS_PER_MO
 | `/api/search.csv` | POST | session | Same run as a CSV download |
 | `/api/openings` | POST | session | Openings mode: live job postings, ranked |
 | `/api/openings.csv` | POST | session | Same run as a CSV download |
+| `/api/profile` | GET/POST/PUT | session | Read the resume into a structured profile; load or save it |
+| `/api/people-for-opening` | POST | session | People around one posting (counts as a run) |
+| `/api/approach` | POST | session | Draft outreach for one result (no run spent) |
+| `/api/feedback` | POST | session | 👍/👎, applied, messaged, replied on one result |
+| `/api/saved-searches` | GET/POST/DELETE | session | Searches the daily poll alerts on |
+| `/api/alerts`, `/api/alerts/seen` | GET/POST | session | New matching postings |
+| `/api/company-timing` | GET | session | Observed hiring months for a company |
+| `/api/admin/stats` | GET | operator | Cost per run, precision@10 |
+| `/api/admin/poll` | POST | token/operator | Run the daily poll now |
 | `/api/billing/checkout`, `/api/billing/portal` | POST | session | Stripe hosted pages |
 | `/api/billing/webhook` | POST | signature | Plan activation/cancellation |
 | `/api/health` | GET | — | Which keys are configured |
@@ -145,8 +155,20 @@ backend/
   openrouter.py   Shared OpenRouter client (chat + vision)
   resume.py       PDF/image -> text
   search.py       Serper sourcing and profile-URL parsing
-  jobs.py         Serper sourcing for job postings (Greenhouse/Lever/Ashby/LinkedIn)
-  timing.py       Real posted/closing dates from the boards' own JSON feeds
+  seeker.py       Resume -> structured, editable profile
+  registry.py     Company -> ATS board discovery, cached
+  boards.py       ATS board readers (7 vendors) -> one Posting shape
+  openings.py     Openings pipeline: boards, fallback, dedupe, filters
+  filters.py      Hard filters in plain code (level, years, location, age, visa)
+  embeddings.py   Stage-one similarity, vectors cached per posting
+  ranking.py      Stage-two review of the top N on full descriptions
+  weights.py      Default and learned ranking weights
+  evaluation.py   precision@10, dead links, offline re-ranking
+  people.py       People around one opening; alumni/location signals
+  poller.py       Daily poll, closing postings, saved-search alerts
+  timing.py       Observed hiring months per company
+  meter.py        Cost of each run
+  jobs.py         Web-search sourcing, now only for discovery and fallback
   jev_client.py   Jev System One client + fit-score combination
   schemas.py      Pydantic request/response models
 frontend/
@@ -154,7 +176,15 @@ frontend/
   login.html      Sign in / sign up
   app.html        The scout UI
   static/theme.css, static/app.js
+scripts/
+  poll_boards.py  The daily poll (cron)
+  eval.py         Export results to label; quality report
+  fit_weights.py  Learn ranking weights from labels
+tests/            pytest; ATS parsers run against saved real responses
 ```
+
+Tests: `pip install -r requirements-dev.txt && python -m pytest tests`. They run on a
+throwaway SQLite file, never your `DATABASE_URL`.
 
 ## Deploying
 
@@ -204,27 +234,70 @@ Before taking real money:
 ## Two modes
 
 **People** finds humans to ask for a referral. **Openings** finds the postings
-themselves — the ones with an application form at the end of them — sourced from
-Greenhouse, Lever, Ashby and LinkedIn Jobs, in that order, because a direct ATS link
-opens onto an apply form while a LinkedIn job page often demands a login first.
+themselves — and, from any posting, the people around that specific role.
 
-### Dates, and what can't be known
+### How openings are found and ranked
 
-Greenhouse and Lever publish their boards as unauthenticated JSON carrying real
-timestamps, so openings from those two show a genuine `posted_at` (and `closes_at`
-where the board sets a deadline). Ashby, LinkedIn and in-house portals — which is most
-Indian employers, Razorpay, PhonePe, Zomato and Swiggy included — publish no dated feed,
-so those postings show **no date at all rather than a guessed one**, and a warning on the
-run says how many.
+Searching Google for postings returns whatever it indexed — stale, duplicated,
+closed, and described by a 160-character snippet. So openings come straight from
+the job boards' own public JSON instead:
 
-Predicting *next* cycle's opening date is a different question, and it cannot be looked
-up: both feeds return only what is open right now, and no public source says when a
-company opened the same role last year. So the app accumulates it instead. Every openings
-run records what it saw in `opening_sightings` (url, company, first seen, last seen, times
-seen). `first_seen` is an upper bound on when a posting opened — never a substitute for
-`posted_at`, and shown in the UI only once it is a genuine prior observation. After a
-full hiring cycle, `db.company_history()` holds per-company dates that were *observed*,
-which is the only honest basis for a prediction.
+| Stage | File | What it does |
+| --- | --- | --- |
+| **Profile** | `backend/seeker.py` | The resume is read once into fields — target roles, level, years, skills, locations, remote, sponsorship, college — shown as editable chips before the run. |
+| **Resolve** | `backend/registry.py` | Each company → its board. Guesses the board name against every ATS API first (free), then one Serper search as a last resort. Found boards are cached in `company_boards`, and misses are cached for 14 days. |
+| **Read** | `backend/boards.py` | Every open posting on Greenhouse, Lever, Ashby, Workable, SmartRecruiters, Recruitee and (unofficial, best-effort, searched per role) Workday — full description, location, department, real dates. Keyed `(ats, board, job_id)`, so duplicates collapse. |
+| **Fallback** | `backend/openings.py` | Companies with no readable board (in-house portals) fall back to web search; every such link is fetched and dropped if dead or closed. Marked "web result" in the UI. |
+| **Filter** | `backend/filters.py` | Plain-code rules: level from the title, required years from the description, location, sponsorship, age. Nothing when a posting doesn't say. Every drop is counted by reason and shown ("1695 not internships; 13 outside your locations"). |
+| **Rank** | `backend/embeddings.py`, `backend/ranking.py` | Embeddings rank everything left (title and description blended). The top 20 go to the model **with the full description**, which answers narrow questions: must-haves met, level fit (under/fit/over), skills matched, skills missing. |
+
+Each card shows why it ranked where it did: *Matches: Python, Go · Missing:
+Kubernetes · Level: fits*. A "quick match" badge means similarity only.
+
+Age: web results older than 30 days are dropped (a stale search hit is usually
+filled). A posting the board **still lists** is open by definition, so board
+postings get a 120-day limit and older ones simply rank lower —
+internship listings routinely stay up for months.
+
+**People for this role** starts from one opening and searches for its recruiter,
+the team's manager and engineers, and alumni of your college; alumni and people
+in the posting's city rank higher, and the drafted message names the role.
+
+### Measuring quality
+
+Every result has 👍 / 👎 and "applied" / "messaged" / "got a reply". Each label is
+stored with the exact features the result was ranked on (`run_results`,
+`feedback`), so it stays usable after the posting closes.
+
+```bash
+python scripts/eval.py export --runs 10 --out labels.jsonl   # label 150-200 by hand (1/0)
+python scripts/eval.py report --labels labels.jsonl --check-links
+```
+
+`report` gives precision@10 as shown and re-ranked by the default and learned
+weights, plus the dead-link rate of the top ten. Run it before and after every
+sourcing or scoring change. `scripts/fit_weights.py` learns the ranking weights
+from labels (logistic regression, pure Python) and saves them only past 200
+labels **and** only if they beat the defaults on held-out data.
+
+Every run's cost is recorded in `run_costs` (Serper calls, tokens, OpenRouter's
+own dollar figure). Operators (`COMP_ACCOUNTS`) see cost per run and quality at
+`GET /api/admin/stats`. Measured on a live run: about $0.005 and 10–20 s per
+openings run.
+
+### The daily poll, alerts and timing
+
+`scripts/poll_boards.py` (a Render cron job in `render.yaml`, or
+`POST /api/admin/poll` with `X-Poll-Token`) re-reads every board in
+`company_boards` once a day: new postings get a true first-seen date, and
+postings a board stops listing are closed that day. Then every saved search is
+matched against what's new, and alerts appear in the app (**Alert me to new
+matches** after a run; Free keeps 1 saved search, Pro 10).
+
+Predicting *when* a company posts can't be looked up — boards only show what's
+open now. `backend/timing.py` builds it from observed first-seen dates and says
+nothing until it has at least 90 days of history; then a card reads e.g.
+"Usually posts intern roles in Aug and Jan".
 
 ## Storage
 
@@ -269,9 +342,11 @@ and any Stripe event. Those accounts are never shown an upgrade button.
 - **Don't automate LinkedIn connection requests or messages with this.** That breaks
   LinkedIn's terms and gets accounts restricted. There's deliberately no sender here —
   use the ranked list for your own manual outreach.
-- Resume text is sent to OpenRouter and TypeSafe for scoring, and it isn't stored
-  server-side beyond the request. Say so in your privacy policy if you deploy this
-  for other people.
+- Resume text is sent to OpenRouter (and TypeSafe, if selected) for scoring. The raw
+  resume isn't stored server-side, but the **structured profile** read from it (roles,
+  level, skills, locations, college, graduation year) is, per user, and a saved search
+  keeps that profile plus an embedding of the resume so the daily poll can match it.
+  Say so in your privacy policy if you deploy this for other people.
 - Jev's scoring is a heuristic and can be wrong, especially on thin search snippets.
 
 ## Known limitations / TODO
@@ -283,11 +358,12 @@ and any Stripe event. Those accounts are never shown an upgrade button.
   a per-candidate error rather than crashing the run. Check
   [docs.typesafe.ai](https://docs.typesafe.ai/concepts/system-one) if calls start failing.
 - No `.docx` resume parsing yet (PDF, PNG, JPG, WebP only).
-- Ranked results aren't persisted — each run lives in the browser until you export it.
-  (Openings runs do record a sighting row per posting, which is history, not results.)
-- **Timing prediction is not built yet**, only its data source. `opening_sightings`
-  starts filling from the first openings run; until a cycle has passed there is nothing
-  to predict from, and the app says nothing rather than guessing.
+- Alerts are in-app only; there is no email or push delivery yet.
+- Workday boards are searched per role during runs but skipped by the daily poll (a
+  tenant can hold tens of thousands of postings), so they get no closing dates.
+- Companies on in-house careers portals (common in India) have no board to read; they
+  fall back to web search, liveness-checked, snippet-only and undated.
+- Hiring-cycle notes need 90+ days of polling before they say anything.
 - No password reset flow.
 - Search quality depends entirely on what's publicly indexed; smaller and newer companies
   return fewer usable results.

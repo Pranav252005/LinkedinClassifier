@@ -1,0 +1,146 @@
+{
+ "id": "744000151103220",
+ "name": "Expert Technical Artist - Shader  (F/H/NB) ",
+ "uuid": "1aed9c28-3432-4498-852d-7c1b26286fc8",
+ "jobId": "8da8b1f2-cba6-40dc-8a09-ad7e2efa9fe2",
+ "jobAdId": "f06f3eb4-c29d-42fd-929b-b6998f4d62e2",
+ "defaultJobAd": true,
+ "refNumber": "REF31464G",
+ "company": {
+  "name": "Ubisoft",
+  "identifier": "Ubisoft2"
+ },
+ "location": {
+  "city": "Annecy",
+  "region": "Auvergne-Rhône-Alpes",
+  "country": "fr",
+  "remote": false,
+  "hybrid": false,
+  "latitude": "45.9058956",
+  "longitude": "6.1259117",
+  "fullLocation": "Annecy, Auvergne-Rhône-Alpes, France"
+ },
+ "customField": [
+  {
+   "fieldId": "56c253c2e4b0cabf01d19d37",
+   "fieldLabel": "Organizational Unit",
+   "valueId": "432993ab-6da4-49ff-9ad6-0a04b18fa0d7",
+   "valueLabel": "Annecy studio"
+  },
+  {
+   "fieldId": "58b7e4d0e4b09a6d37a0cd8b",
+   "fieldLabel": "Department",
+   "valueId": "13847731",
+   "valueLabel": "Ubisoft"
+  },
+  {
+   "fieldId": "5bb3995c6d8bc56bc081b87d",
+   "fieldLabel": "Contract",
+   "valueId": "b5a86fc0-2681-4b3c-98b6-b73a4be23ef1",
+   "valueLabel": "Permanent"
+  },
+  {
+   "fieldId": "COUNTRY",
+   "fieldLabel": "Country/Region",
+   "valueId": "fr",
+   "valueLabel": "France"
+  },
+  {
+   "fieldId": "6904797c56f594d5ed50988d",
+   "fieldLabel": "Work flexibility",
+   "valueId": "ccb10278-8410-4710-b0e7-698fc2195139",
+   "valueLabel": "Office-based"
+  },
+  {
+   "fieldId": "68e4ce369c52964c7125078a",
+   "fieldLabel": "Job Family",
+   "valueId": "f0fbddbb-5538-41ec-a9ea-849548505b2d",
+   "valueLabel": "Art"
+  },
+  {
+   "fieldId": "56d1aa7ae4b0a07f777a4ef4",
+   "fieldLabel": "Brands",
+   "valueId": "default",
+   "valueLabel": "Ubisoft"
+  },
+  {
+   "fieldId": "6904811aa8fa2db78e2ee2ed",
+   "fieldLabel": "Job  Function",
+   "valueId": "674ad512-f55c-43e8-8d3f-8bffaaec02b2",
+   "valueLabel": "Technical Art"
+  },
+  {
+   "fieldId": "691ca2ee342dfb96e5364508",
+   "fieldLabel": "Reference Job",
+   "valueId": "31878a71-481a-41ab-8706-d2e36a60b849",
+   "valueLabel": "Technical Artist"
+  },
+  {
+   "fieldId": "6a158e3c77b1f5657b57af9d",
+   "fieldLabel": "Management Unit (New)",
+   "valueId": "36d02bfd-569a-4aef-9905-8679f578380c",
+   "valueLabel": "CREATIVE NETWORK"
+  },
+  {
+   "fieldId": "5def94650389ad3cc4be9d17",
+   "fieldLabel": "OU sub location (select when applicable)",
+   "valueId": "ac8ae7ad-70a6-491d-b848-4625c10b9609",
+   "valueLabel": "N/A"
+  }
+ ],
+ "releasedDate": "2026-09-22T17:49:45.760Z",
+ "creator": {
+  "name": "Anna Konwinski",
+  "avatarUrl": ""
+ },
+ "postingUrl": "https://jobs.smartrecruiters.com/Ubisoft2/744000151103220-expert-technical-artist-shader-f-h-nb-",
+ "applyUrl": "https://jobs.smartrecruiters.com/Ubisoft2/744000151103220-expert-technical-artist-shader-f-h-nb-?oga=true",
+ "referralUrl": "https://jobs.smartrecruiters.com/external-referrals/company/Ubisoft2/publication/1aed9c28-3432-4498-852d-7c1b26286fc8?dcr_ci=Ubisoft2",
+ "jobAd": {
+  "sections": {
+   "companyDescription": {
+    "title": "Company Description",
+    "text": "<p>Ubisoft is a global leader in gaming with teams across the world creating original and memorable gaming experiences, from Assassin’s Creed, Rainbow Six, to Just Dance and more. We believe diverse perspectives help both players and teams thrive. If you’re passionate about innovation and pushing entertainment boundaries, join our journey and help us create the unknown !&#xa0;</p>"
+   },
+   "jobDescription": {
+    "title": "Job Description",
+    "text": "<p>YOUR DAILY ADVENTURE</p><p>The Technical Artist works with their lead to improve the function, stability, scalability, user experience and performance of the shaders and material pipelines.&#xa0; They are gatekeepers of budgets and technical constraints with a focus on shaders, graphics and rendering with which they are expected to inform and guide the team. This is a key support role to provide the best tools and solutions for production.&#xa0;<br>\n<br>\n<strong>Responsibilities</strong></p><ul><li>Support the VFX team in implementing visual effects, ensure there are no regressions when optimising, propose improvements, and create tutorials. Provide technical solutions to artistic requirements by collaborating with GPP teams on how to achieve specific visual results</li><li>Produce and maintain shaders and complex VFX</li><li>Monitor and optimize performance: PC/Consoles profiling and optimization</li><li>Act as the gatekeeper of VFX constraints, pushing for top visual quality and performance working collaboratively with Art Leads, Technical Directors and QA</li><li>Pipeline: explore optimization opportunities and improve production workflows (evaluating new technologies that could be integrated into the engine when appropriate)</li><li>R&amp;D: conduct tests and experimentation to propose new solutions and improvements.</li></ul><p>&#xa0;</p><ul></ul>"
+   },
+   "qualifications": {
+    "title": "Qualifications",
+    "text": "<p>&#xa0;</p><ul><li>You’ve already worked in a <strong>Technical Artist capacity alongside a VFX team</strong></li><li>You are comfortable with <strong>particle systems</strong> (GPU/CPU) <strong>constraints</strong></li><li>You’ve been working on <strong>performance and monitoring</strong> on a multi-platform production</li><li>You have an aptitude for problem solving, decision making, collaboration &amp; communication and have strong organizational skills</li><li><strong>Shader development</strong> (any shader language or node base editor) has no secret for you</li><li>Experience, Knowledge and interest in multiple areas of game development:<ul><li>Shaders</li><li>FX</li><li>Lighting</li><li>Rendering and Post Processes</li><li>HLSL</li></ul></li><li>Experience with <strong>game editors and engines&#xa0;</strong>and<strong> with console development</strong></li><li>Being resourceful in finding technical solutions for artistic needs&#xa0;</li></ul>"
+   },
+   "additionalInformation": {
+    "title": "Additional Information",
+    "text": "<p>Role based at the Annecy Studio<br>\n&#xa0;</p><p>&#xa0;</p>"
+   }
+  }
+ },
+ "active": true,
+ "visibility": "PUBLIC",
+ "industry": {
+  "id": "entertainment",
+  "label": "Entertainment"
+ },
+ "function": {
+  "id": "art_creative",
+  "label": "Art/Creative"
+ },
+ "department": {
+  "id": 13847731,
+  "label": "Ubisoft"
+ },
+ "experienceLevel": {
+  "id": "mid_senior_level",
+  "label": "Mid-Senior Level"
+ },
+ "typeOfEmployment": {
+  "id": "permanent",
+  "label": "Full-time"
+ },
+ "language": {
+  "code": "en",
+  "label": "English",
+  "labelNative": "English (US)"
+ }
+}

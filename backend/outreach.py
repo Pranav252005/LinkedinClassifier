@@ -74,12 +74,22 @@ async def draft(kind: str, target: dict, resume: str, role_target: str = "") -> 
             f"Company: {_clip(target.get('company'), 120)}\n"
             f"What the search result says about them: {_clip(target.get('snippet'), 600)}"
         )
+        if target.get("opening_title"):
+            # Found through a specific opening: the message is about that role.
+            about += (
+                f"\n\nTHE SPECIFIC OPENING this is about: {_clip(target.get('opening_title'), 200)}"
+                f"{' — ' + _clip(target.get('opening_url'), 300) if target.get('opening_url') else ''}\n"
+                "Name this role in the note and the message. Ask about it, or for a referral to it, "
+                "rather than asking whether there are any openings."
+            )
+            if target.get("description"):
+                about += f"\nWhat the posting asks for: {_clip(target.get('description'), 2500)}"
     else:
         about = (
             f"Role: {_clip(target.get('title'), 200)}\n"
             f"Company: {_clip(target.get('company'), 120)}\n"
             f"Posted: {_clip(target.get('posted_at'), 40) or 'unknown'}\n"
-            f"What the posting says: {_clip(target.get('snippet'), 600)}"
+            f"What the posting says: {_clip(target.get('description') or target.get('snippet'), 4000)}"
         )
 
     prompt = (
