@@ -1,0 +1,35 @@
+# Render blueprint for the FastAPI backend.
+# Netlify cannot run Python; this is where the API actually lives.
+services:
+  - type: web
+    name: leadclassifier-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      # Secrets — set these in the Render dashboard, never commit them.
+      - key: DATABASE_URL        # the Neon pooled connection string
+        sync: false
+      - key: SECRET_KEY          # python -c "import secrets;print(secrets.token_urlsafe(48))"
+        sync: false
+      - key: SERPER_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_PRICE_ID
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: COMP_ACCOUNTS
+        sync: false
+      # Non-secret configuration.
+      - key: PUBLIC_BASE_URL     # your Netlify URL — drives cookie security and Stripe returns
+        value: https://CHANGE-ME.netlify.app
+      - key: SCORING_PROVIDER
+        value: openrouter
+      - key: PYTHON_VERSION
+        value: "3.12"

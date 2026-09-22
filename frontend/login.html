@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in — LeadClassifier</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%8E%AF%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/theme.css">
+<style>
+  body { display: grid; place-items: center; min-height: 100svh; padding: 40px 20px; }
+  .box { width: 100%; max-width: 380px; }
+  .wordmark { display: inline-block; font-size: 13.5px; font-weight: 700; margin-bottom: 30px; }
+  .wordmark i { color: var(--accent); font-style: normal; }
+  h1 { font-size: 22px; margin: 10px 0 8px; }
+  .sub { color: var(--ink-dim); margin: 0 0 26px; }
+  .switch { margin-top: 18px; color: var(--ink-dim); text-align: center; font-size: 12.5px; }
+  .switch button { background: none; border: 0; color: var(--ink); cursor: pointer; font: inherit;
+                   padding: 0; border-bottom: 1px solid var(--line); }
+  .switch button:hover { border-bottom-color: var(--ink-faint); }
+  .btn { width: 100%; justify-content: center; }
+  #msg { margin-bottom: 14px; display: none; }
+  .back { display: inline-block; margin-top: 22px; color: var(--ink-faint); font-size: 12px; }
+  .back:hover { color: var(--ink-dim); }
+</style>
+</head>
+<body>
+<div class="box">
+  <a class="wordmark" href="/">Lead<i>Classifier</i></a>
+  <p class="eyebrow" id="eyebrow">Sign in</p>
+  <h1 id="title">Welcome back</h1>
+  <p class="sub" id="sub">Sign in to run the pipeline.</p>
+
+  <div class="note bad" id="msg"></div>
+
+  <form id="form">
+    <label class="field">
+      <span>Email</span>
+      <input id="email" type="email" autocomplete="email" required placeholder="you@school.edu">
+    </label>
+    <label class="field">
+      <span>Password <span class="opt" id="pwHint"></span></span>
+      <input id="password" type="password" autocomplete="current-password" required minlength="8" placeholder="At least 8 characters">
+    </label>
+    <button class="btn" id="submit" type="submit">Sign in</button>
+  </form>
+
+  <p class="switch">
+    <span id="switchText">New here?</span>
+    <button type="button" id="switchBtn">Create an account</button>
+  </p>
+  <a class="back" href="/">← Back</a>
+</div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  let mode = new URLSearchParams(location.search).get('mode') === 'signup' ? 'signup' : 'login';
+
+  function paint() {
+    const signup = mode === 'signup';
+    $('title').textContent = signup ? 'Create an account' : 'Welcome back';
+    $('eyebrow').textContent = signup ? 'New account' : 'Sign in';
+    $('sub').textContent = signup
+      ? 'Free accounts get 3 runs a month.'
+      : 'Sign in to run the pipeline.';
+    $('submit').textContent = signup ? 'Create account' : 'Sign in';
+    $('pwHint').textContent = signup ? '(8+ characters)' : '';
+    $('password').autocomplete = signup ? 'new-password' : 'current-password';
+    $('switchText').textContent = signup ? 'Already have an account?' : 'New here?';
+    $('switchBtn').textContent = signup ? 'Sign in instead' : 'Create an account';
+    $('msg').style.display = 'none';
+  }
+
+  $('switchBtn').addEventListener('click', () => { mode = mode === 'signup' ? 'login' : 'signup'; paint(); });
+
+  $('form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    $('submit').disabled = true;
+    $('msg').style.display = 'none';
+    try {
+      const res = await fetch(`/api/auth/${mode}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: $('email').value, password: $('password').value }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+      location.href = '/app';
+    } catch (err) {
+      $('msg').textContent = err.message;
+      $('msg').style.display = 'block';
+      $('submit').disabled = false;
+    }
+  });
+
+  paint();
+</script>
+</body>
+</html>
