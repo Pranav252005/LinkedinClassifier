@@ -47,6 +47,7 @@ Fill in `.env`:
 | Key | Needed for | Where |
 | --- | --- | --- |
 | `SERPER_API_KEY` | Sourcing | [serper.dev](https://serper.dev) — free tier |
+| `SERPER_MAX_RESULTS` | Results per query cap (optional) | defaults to 10 — free keys reject more |
 | `OPENROUTER_API_KEY` | Planning, scoring, image OCR | [openrouter.ai](https://openrouter.ai) |
 | `TYPESAFE_API_KEY` | Scoring, only if `SCORING_PROVIDER=typesafe` | [typesafe.ai](https://typesafe.ai) — early access via waitlist |
 | `SECRET_KEY` | Session signing | `python -c "import secrets;print(secrets.token_urlsafe(48))"` |
@@ -257,6 +258,12 @@ and any Stripe event. Those accounts are never shown an upgrade button.
 - No password reset flow.
 - Search quality depends entirely on what's publicly indexed; smaller and newer companies
   return fewer usable results.
+- **Free Serper keys cap results per query at 10.** Asking for more returns
+  `400 Query pattern not allowed for free accounts` and fails the whole run, so requests
+  are clamped to `SERPER_MAX_RESULTS`. Raise it if you move to a paid plan.
+- Queries stop as soon as `max_candidates` is reached. The planner happily produces 90+
+  company x title pairs, and running them all would spend the Serper budget on results
+  that get discarded.
 
 ## License
 

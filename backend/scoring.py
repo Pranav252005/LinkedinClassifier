@@ -74,9 +74,22 @@ For EACH candidate return one object:
 
 Return a JSON array of exactly {len(batch)} such objects and nothing else.
 
-Judge on evidence in the snippet. A thin or ambiguous snippet means an uncertain
-score near 0.5, not a confident one. Someone who clearly does not work at the
-company, or works in an unrelated function, scores low.
+Calibration matters more than optimism. These scores are used to rank people
+against each other, so a batch where everything scores the same is useless.
+
+- 1.0 means certainty. A search snippet almost never justifies it — reserve
+  0.9+ for a snippet that states the person's current role AND employer and
+  both match the target.
+- 0.6-0.8: the role and company look right but the snippet is partial, stale,
+  or the title is adjacent rather than exact.
+- 0.4-0.6: genuinely ambiguous. A thin snippet belongs here, not higher.
+- Below 0.3: wrong company, clearly a past role, or an unrelated function.
+
+Judge each person on the evidence actually present in their own snippet, and
+spread the scores to reflect real differences between them.
+
+Priority is about who to contact FIRST, so it must discriminate too: reserve
+"high" for the strongest few in this batch, not for everyone who is plausible.
 """
 
 

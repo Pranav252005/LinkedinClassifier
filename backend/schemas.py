@@ -29,7 +29,8 @@ class SearchRequest(BaseModel):
     companies: list[str] = Field(default_factory=list)
     titles: list[str] = Field(default_factory=list)
     role_target: str = Field(default="", max_length=200)
-    per_query_results: int = Field(default=10, ge=1, le=20)
+    # Free Serper keys reject more than 10; see SERPER_MAX_RESULTS.
+    per_query_results: int = Field(default=10, ge=1, le=100)
     max_candidates: int = Field(default=40, ge=1, le=200)
     use_agent: bool = Field(default=True, description="Let the OpenRouter agent expand the plan.")
 

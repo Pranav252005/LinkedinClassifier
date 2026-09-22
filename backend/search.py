@@ -13,7 +13,7 @@ from urllib.parse import urlparse, urlunparse
 
 import httpx
 
-from config import SERPER_API_KEY, SERPER_BASE_URL
+from config import SERPER_API_KEY, SERPER_BASE_URL, SERPER_MAX_RESULTS
 from schemas import Candidate
 
 # "Jane Doe - University Recruiter - Acme Corp | LinkedIn"
@@ -95,19 +95,41 @@ def _parse_result(item: dict, company: str, title: str) -> Candidate | None:
     )
 
 
+def _serper_message(resp: httpx.Response) -> str:
+    """Serper explains itself in the body; httpx's status text does not."""
+    try:
+        payload = resp.json()
+    except ValueError:
+        return resp.text[:200].strip()
+    if isinstance(payload, dict):
+        for key in ("message", "error", "detail"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return resp.text[:200].strip()
+
+
 async def _run_query(
     client: httpx.AsyncClient, api_key: str, spec: QuerySpec, num: int
 ) -> list[Candidate]:
+    if not spec.query.strip():
+        raise SearchError("Refusing to send an empty search query.")
+
     resp = await client.post(
         f"{SERPER_BASE_URL}/search",
         headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
-        json={"q": spec.query, "num": num},
+        # Clamped: a free key 400s above SERPER_MAX_RESULTS, and one rejected
+        # query fails the whole run.
+        json={"q": spec.query, "num": max(1, min(num, SERPER_MAX_RESULTS))},
     )
     if resp.status_code in (401, 403):
         raise SearchError("Serper rejected the API key (check SERPER_API_KEY).")
     if resp.status_code == 429:
         raise SearchError("Serper rate limit / quota exhausted.")
-    resp.raise_for_status()
+    if resp.status_code >= 400:
+        # Pass Serper's own wording through — it names the actual problem,
+        # e.g. "Query pattern not allowed for free accounts."
+        raise SearchError(f"Serper returned {resp.status_code}: {_serper_message(resp)}")
 
     organic = resp.json().get("organic") or []
     found = [_parse_result(item, spec.company, spec.title) for item in organic]
@@ -116,42 +138,51 @@ async def _run_query(
 
 async def run_queries(
     specs: list[QuerySpec], per_query_results: int = 10, max_candidates: int = 40
-) -> list[Candidate]:
-    """Run every query concurrently and return deduped candidates."""
+) -> tuple[list[Candidate], list[QuerySpec]]:
+    """Run queries until enough candidates are found.
+
+    Returns (candidates, specs_actually_run) — the second differs from the input
+    whenever the early stop kicks in, and callers report it so the UI does not
+    claim credits that were never spent.
+    """
     if not SERPER_API_KEY:
         raise SearchError("SERPER_API_KEY is not set — copy .env.example to .env and fill it in.")
     if not specs:
-        return []
-
-    semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
-
-    async def guarded(client: httpx.AsyncClient, spec: QuerySpec) -> list[Candidate]:
-        async with semaphore:
-            return await _run_query(client, SERPER_API_KEY, spec, per_query_results)
-
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        batches = await asyncio.gather(
-            *(guarded(client, spec) for spec in specs), return_exceptions=True
-        )
+        return [], []
 
     candidates: list[Candidate] = []
     seen: set[str] = set()
     first_error: BaseException | None = None
+    ran: list[QuerySpec] = []
 
-    for batch in batches:
-        if isinstance(batch, BaseException):
-            first_error = first_error or batch
-            continue
-        for candidate in batch:
-            if candidate.linkedin_url in seen:
-                continue
-            seen.add(candidate.linkedin_url)
-            candidates.append(candidate)
+    # Run in waves and stop once we have enough. Every query costs a Serper
+    # credit, and the planner routinely produces far more company x title pairs
+    # than a run needs — issuing all of them would spend the budget to throw
+    # most of the results away.
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        for start in range(0, len(specs), MAX_CONCURRENCY):
+            wave = specs[start : start + MAX_CONCURRENCY]
+            ran.extend(wave)
+            results = await asyncio.gather(
+                *(_run_query(client, SERPER_API_KEY, spec, per_query_results) for spec in wave),
+                return_exceptions=True,
+            )
+            for batch in results:
+                if isinstance(batch, BaseException):
+                    first_error = first_error or batch
+                    continue
+                for candidate in batch:
+                    if candidate.linkedin_url in seen:
+                        continue
+                    seen.add(candidate.linkedin_url)
+                    candidates.append(candidate)
+            if len(candidates) >= max_candidates:
+                break
 
     if not candidates and first_error is not None:
         raise SearchError(f"All search queries failed: {first_error}")
 
-    return candidates[:max_candidates]
+    return candidates[:max_candidates], ran
 
 
 async def find_candidates(
@@ -162,5 +193,5 @@ async def find_candidates(
 ) -> tuple[list[Candidate], list[QuerySpec]]:
     """Convenience path: build queries from companies x titles, then run them."""
     specs = build_queries(companies, titles)
-    candidates = await run_queries(specs, per_query_results, max_candidates)
-    return candidates, specs
+    candidates, ran = await run_queries(specs, per_query_results, max_candidates)
+    return candidates, ran

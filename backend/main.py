@@ -232,11 +232,12 @@ async def _run_pipeline(req: SearchRequest, user: sqlite3.Row) -> SearchResponse
     # 2. Source — Serper over site:linkedin.com/in.
     specs = build_queries(plan.companies, plan.titles)
     try:
-        candidates = await run_queries(specs, req.per_query_results, req.max_candidates)
+        candidates, ran = await run_queries(specs, req.per_query_results, req.max_candidates)
     except SearchError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    queries = [spec.query for spec in specs]
+    # Report the queries actually sent, not the ones merely planned.
+    queries = [spec.query for spec in ran]
     if not candidates:
         db.record_run(user["id"], ", ".join(plan.companies), 0)
         return SearchResponse(

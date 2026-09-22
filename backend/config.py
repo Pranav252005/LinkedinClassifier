@@ -27,6 +27,10 @@ def _int_env(name: str, default: int) -> int:
 # --- external services -------------------------------------------------------
 SERPER_API_KEY = _env("SERPER_API_KEY")
 SERPER_BASE_URL = _env("SERPER_BASE_URL", "https://google.serper.dev").rstrip("/")
+# Free Serper accounts reject num > 10 with
+#   400 "Query pattern not allowed for free accounts."
+# Paid plans allow more, so this is a setting rather than a constant.
+SERPER_MAX_RESULTS = _int_env("SERPER_MAX_RESULTS", 10)
 
 TYPESAFE_API_KEY = _env("TYPESAFE_API_KEY")
 TYPESAFE_BASE_URL = _env("TYPESAFE_BASE_URL", "https://api.typesafe.ai").rstrip("/")
