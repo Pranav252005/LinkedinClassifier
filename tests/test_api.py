@@ -34,7 +34,7 @@ def client(monkeypatch):
         return {"Stripe": ("greenhouse", "stripe")}, [c for c in companies if c != "Stripe"]
     monkeypatch.setattr(registry, "resolve_many", resolve_many)
 
-    async def fetch_boards(board_list, search=None):
+    async def fetch_boards(board_list, search=None, where=None):
         return {("greenhouse", "stripe"): boards.parse_greenhouse("stripe", load("greenhouse"))}, {}
     monkeypatch.setattr(boards, "fetch_boards", fetch_boards)
 
@@ -94,9 +94,11 @@ def test_openings_end_to_end(client):
     row = db.labeled_feedback("opening")[0]
     assert json.loads(row["features"]) == top["features"]
 
-    # A repeat run skips everything already shown.
+    # A repeat run finds nothing new, so it falls back to what was shown, marked as such.
     again = _run(client)
-    assert again["count"] == 0 and any("already been shown" in w for w in again["warnings"])
+    assert any("already been shown" in w for w in again["warnings"])
+    assert again["count"] >= 1 and all(r["seen_before"] for r in again["results"])
+    assert any("seen before" in w for w in again["warnings"])
     both = _run(client, fresh_only=False)
     assert both["count"] == data["count"]
     assert both["results"][0]["feedback"]["applied"] is True

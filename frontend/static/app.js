@@ -358,6 +358,9 @@ function renderOpenings(data) {
     const checked = r.checked
       ? `<span class="badge live" title="${esc(r.check_note || 'the full posting was read to confirm mode, location and pay')}">checked</span>`
       : '<span class="badge quick" title="the posting page was not read; mode, location and pay are unconfirmed">unchecked</span>';
+    const again = r.seen_before
+      ? '<span class="badge quick" title="shown to you on an earlier run; back because few new matches were found">seen before</span>'
+      : '';
     const quick = r.reviewed ? '' :
       '<span class="badge quick" title="ranked by similarity only; the full description was not reviewed">quick match</span>';
     return `<article class="opening">
@@ -376,7 +379,7 @@ function renderOpenings(data) {
         ${r.error ? `<div class="rowerr">${esc(r.error)}</div>` : ''}
       </div>
       <div class="opening-foot">
-        <div>${src}${checked}${mode}${pay}${quick}${when}${close}${seen}</div>
+        <div>${src}${again}${checked}${mode}${pay}${quick}${when}${close}${seen}</div>
         <span class="foot-actions">
           ${fbButtons('opening', i, r.feedback)}
           <button type="button" class="btn ghost approach people-btn" data-i="${i}"

@@ -62,16 +62,18 @@ _SLUG_SUFFIXES = ("unirecruitment", "universityrecruitment", "universityrecruiti
                   "careers", "jobs", "hq", "inc")
 
 
-def _query(domain: str, role: str, company: str = "") -> str:
+def _query(domain: str, role: str, company: str = "", where: str = "") -> str:
+    place = f' "{where}"' if where else ""
     if not domain:
-        return f'"{company}" "{role}" careers apply -site:linkedin.com -site:naukri.com -site:indeed.com'
-    return f'site:{domain} "{role}"' + (f' "{company}"' if company else "")
+        return f'"{company}" "{role}"{place} careers apply -site:linkedin.com -site:naukri.com -site:indeed.com'
+    return f'site:{domain} "{role}"' + (f' "{company}"' if company else "") + place
 
 
 def build_queries(roles: list[str], companies: list[str], limit: int = 24,
-                  sources: tuple[str, ...] = DEFAULT_SOURCES) -> list[tuple[str, str]]:
+                  sources: tuple[str, ...] = DEFAULT_SOURCES, where: str = "") -> list[tuple[str, str]]:
     """(source, query) pairs. Companies are optional — without them this finds
-    openings anywhere, which is the point when you do not yet have a shortlist."""
+    openings anywhere, which is the point when you do not yet have a shortlist.
+    `where` pins every query to one place ("Bengaluru")."""
     specs: list[tuple[str, str]] = []
     roles = [r.strip() for r in roles if r.strip()]
     companies = [c.strip() for c in companies if c.strip()]
@@ -82,11 +84,11 @@ def build_queries(roles: list[str], companies: list[str], limit: int = 24,
         for role in roles:
             if companies:
                 for company in companies:
-                    specs.append((source, _query(domain, role, company)))
+                    specs.append((source, _query(domain, role, company, where)))
                     if len(specs) >= limit:
                         return specs
             else:
-                specs.append((source, _query(domain, role)))
+                specs.append((source, _query(domain, role, where=where)))
                 if len(specs) >= limit:
                     return specs
     return specs
@@ -202,6 +204,7 @@ async def find_openings(
     exclude: frozenset[str] = frozenset(),
     max_queries: int = 24,
     sources: tuple[str, ...] = DEFAULT_SOURCES,
+    where: str = "",
 ) -> tuple[list[Opening], list[str], int]:
     """Return (openings, queries actually run, skipped_as_already_seen).
 
@@ -211,7 +214,7 @@ async def find_openings(
     if not SERPER_API_KEY:
         raise SearchError("SERPER_API_KEY is not set — copy .env.example to .env and fill it in.")
 
-    specs = build_queries(roles, companies, max_queries, sources)
+    specs = build_queries(roles, companies, max_queries, sources, where)
     if not specs:
         return [], [], 0
 

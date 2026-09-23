@@ -37,7 +37,7 @@ log = logging.getLogger("jcs.poller")
 # Boards read concurrently during a poll; Workday is excluded from the full
 # poll (it is searched per role, not listed) and refreshed by runs instead.
 POLL_CONCURRENCY = 4
-POLL_SKIP = ("workday",)
+POLL_SKIP = boards.SEARCHED_ATS
 ALERTS_PER_SEARCH = 20
 
 

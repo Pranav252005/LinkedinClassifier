@@ -489,6 +489,13 @@ async def _run_openings(req: SearchRequest, user: sqlite3.Row) -> OpeningsRespon
                                          req.include_older, max_results)
     warnings += got["warnings"]
     warnings += _freshness_note(got["skipped"], "openings", req.fresh_only)
+    levels = got.get("levels") or {}
+    if sum(levels.values()):
+        order = ("intern", "entry", "mid", "senior", "unstated")
+        names = {"intern": "internships", "entry": "entry-level", "mid": "mid-level", "senior": "senior",
+                 "unstated": "level not stated"}
+        warnings.append(f"Found {sum(levels.values())} openings: "
+                        + ", ".join(f"{levels[k]} {names[k]}" for k in order if levels.get(k)) + ".")
     filtered_note = filters.describe(got["dropped"])
     if filtered_note:
         warnings.append(filtered_note)
@@ -499,9 +506,7 @@ async def _run_openings(req: SearchRequest, user: sqlite3.Row) -> OpeningsRespon
 
     if not got["openings"]:
         run_id = _finish_run(user, "opening", ", ".join(plan.companies) or "any", [])
-        empty = (_nothing_new_note(got["skipped"], "openings") if got["pool_size"] <= got["skipped"]
-                 else "Every posting found was hidden by your profile's filters — loosen them "
-                      "(level, locations, age) and run again.")
+        empty = _empty_openings_note(got, profile)
         return OpeningsResponse(count=0, results=[], warnings=warnings + [empty],
                                 runs_used=used + 1, run_id=run_id, **common)
 
@@ -523,6 +528,24 @@ async def _run_openings(req: SearchRequest, user: sqlite3.Row) -> OpeningsRespon
 
     return OpeningsResponse(count=len(results), results=results, warnings=warnings,
                             runs_used=used + 1, run_id=run_id, **common)
+
+
+def _empty_openings_note(got: dict, profile) -> str:
+    """Why nothing came back: too little found, all shown before, or all filtered."""
+    pool, dropped = got["pool_size"], got["dropped"]
+    if pool == 0 and got["skipped"]:
+        return _nothing_new_note(got["skipped"], "openings")
+    if pool == 0:
+        return ("The search found no openings for these roles. Try broader role names, "
+                "or name a few companies to read their boards.")
+    wants_intern_only = "internship" in profile.job_types and "full_time" not in profile.job_types
+    if wants_intern_only and dropped.get("level_not_intern", 0) >= pool * 0.8:
+        return ("The search found openings but almost none were internships — this is a search "
+                "shortfall, not your filters. Try naming companies with internship programmes, "
+                "or tick Full-time too.")
+    top = max(dropped.items(), key=lambda kv: kv[1])[0] if dropped else ""
+    return (f"Every posting found was hidden by your profile's filters, most for "
+            f"“{filters.REASONS.get(top, top)}” — loosen that and run again.")
 
 
 @app.post("/api/openings", response_model=OpeningsResponse)

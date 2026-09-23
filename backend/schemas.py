@@ -143,6 +143,8 @@ class Opening(BaseModel):
     checked: bool = False
     check_note: Optional[str] = None
     in_location: Optional[bool] = None
+    # Shown to this user on an earlier run; back only because too little was new.
+    seen_before: bool = False
     verified: bool = False    # listed by the board's own API during this run
     # The full description. Used for scoring and never sent to the browser --
     # the board link has it, and forty of them would bloat every response.

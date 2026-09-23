@@ -193,11 +193,18 @@ async def _confirm(company: str, ats: str, slug: str) -> bool:
     return True
 
 
+# Companies whose own careers site has an adapter of its own (boards.py).
+KNOWN = {"ibm": ("ibm", "ibm")}
+
+
 async def resolve(company: str, allow_search: bool = True) -> tuple[str, str] | None:
     """(ats, slug) for a company, or None if it has no board this app can read."""
     company = " ".join((company or "").split())
     if not company:
         return None
+    known = KNOWN.get(_norm(company))
+    if known:
+        return known
     try:
         row = db.get_board(company)
     except Exception:

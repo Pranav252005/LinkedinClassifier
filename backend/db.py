@@ -828,7 +828,7 @@ def mark_alerts_seen(user_id: int) -> int:
 
 
 def search_open_postings(terms: list[str], exclude_boards: list[tuple[str, str]] = (),
-                         limit: int = 600) -> list[Row]:
+                         limit: int = 600, require: list[str] = ()) -> list[Row]:
     """Open postings on any known board whose title contains one of these terms.
 
     This is what makes the daily poll pay off for runs without a company list:
@@ -839,12 +839,18 @@ def search_open_postings(terms: list[str], exclude_boards: list[tuple[str, str]]
         return []
     like = " OR ".join("LOWER(title) LIKE ?" for _ in terms)
     params: list = [f"%{t}%" for t in terms]
+    # `require`: the title must also contain one of these ("intern"), so a
+    # flood of full-time roles cannot fill the limit before any internship.
+    need = ""
+    if require:
+        need = " AND (" + " OR ".join("LOWER(title) LIKE ?" for _ in require) + ")"
+        params += [f"%{t.lower()}%" for t in require]
     skip = ""
     if exclude_boards:
         skip = " AND NOT (" + " OR ".join("(ats = ? AND slug = ?)" for _ in exclude_boards) + ")"
         for ats, slug in exclude_boards:
             params += [ats, slug]
-    sql = (f"SELECT * FROM postings WHERE closed_at IS NULL AND ({like}){skip} "
+    sql = (f"SELECT * FROM postings WHERE closed_at IS NULL AND ({like}){need}{skip} "
            f"ORDER BY first_seen DESC LIMIT ?")
     with connect() as conn:
         return _fetchall(conn, sql, (*params, limit))

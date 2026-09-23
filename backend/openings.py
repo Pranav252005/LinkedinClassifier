@@ -40,6 +40,7 @@ log = logging.getLogger("jcs.openings")
 
 EMBED_POOL = 800          # most postings embedded per run
 DETAIL_POOL = 60          # most descriptions fetched one-by-one (SmartRecruiters, Workday)
+MIN_LEADS = 5             # fewer survivors than this and the search widens itself
 DISCOVERY_QUERIES = 8     # web searches used to discover boards when no company is named
 LIVENESS_TIMEOUT = 8.0
 
@@ -105,7 +106,37 @@ def role_terms(roles: list[str]) -> list[str]:
     return list(dict.fromkeys(out))
 
 
-async def _read_boards(company_boards: dict[str, tuple[str, str]], roles: list[str]
+INTERN_WORDS = ["intern", "co-op", "apprentice", "trainee"]
+
+
+def intern_only(profile: Profile) -> bool:
+    return "internship" in profile.job_types and "full_time" not in profile.job_types
+
+
+def search_roles(roles: list[str], profile: Profile) -> list[str]:
+    """Roles as search phrases. An internship-only seeker searches for
+    "software engineer intern", not "software engineer": otherwise boards and
+    web search return full-time roles that the filters then all drop."""
+    if not intern_only(profile):
+        return roles
+    return list(dict.fromkeys(
+        r if filters.title_level(r) == "intern" else f"{r} intern" for r in roles))
+
+
+def board_places(profile: Profile) -> list[str]:
+    """Place names to narrow searched boards by, aliases included ("Bangalore"
+    also finds "Bengaluru"). None for a remote-only seeker or no locations."""
+    if profile.work_mode == "remote":
+        return []
+    out: list[str] = []
+    for place in profile.locations:
+        key = place.strip().lower()
+        out += [t for t in filters._ALIASES.get(key, {key}) if re.fullmatch(r"[a-z .]{3,}", t)]
+    return list(dict.fromkeys(out))
+
+
+async def _read_boards(company_boards: dict[str, tuple[str, str]], roles: list[str],
+                       where: list[str] | None = None
                        ) -> tuple[list[ScoredOpening], list[str], list[str]]:
     """Open postings on each board: from the DB if polled recently, else live."""
     stale: dict[tuple[str, str], str] = {}
@@ -117,7 +148,7 @@ async def _read_boards(company_boards: dict[str, tuple[str, str]], roles: list[s
             row = db.get_board(company)
         except Exception:
             row = None
-        if ats != "workday" and row is not None and _fresh(row["last_polled"]):
+        if ats not in boards.SEARCHED_ATS and row is not None and _fresh(row["last_polled"]):
             try:
                 out += [row_to_opening(r) for r in db.open_postings_for([(ats, slug)])]
                 continue
@@ -128,15 +159,15 @@ async def _read_boards(company_boards: dict[str, tuple[str, str]], roles: list[s
     warnings: list[str] = []
     if stale:
         started = datetime.now(timezone.utc).isoformat()
-        fetched, errors = await boards.fetch_boards(list(stale), search=roles)
+        fetched, errors = await boards.fetch_boards(list(stale), search=roles, where=where)
         for (ats, slug), postings in fetched.items():
             company = stale[(ats, slug)]
             for p in postings:
                 p.company = p.company or company
             try:
                 first_seen = db.upsert_postings(postings, started)
-                # Workday is searched, not listed in full, so absence proves nothing there.
-                if ats != "workday":
+                # Searched boards are not listed in full, so absence proves nothing there.
+                if ats not in boards.SEARCHED_ATS:
                     db.close_missing(ats, slug, started)
                 db.mark_polled(ats, slug, len(postings))
             except Exception as exc:
@@ -151,13 +182,14 @@ async def _read_boards(company_boards: dict[str, tuple[str, str]], roles: list[s
     return out, names, warnings
 
 
-async def _discover_boards(roles: list[str]) -> dict[str, tuple[str, str]]:
-    """No companies named: use a few web searches to find boards hiring for these roles."""
+async def _discover_boards(roles: list[str], where: str = "", max_queries: int = DISCOVERY_QUERIES
+                           ) -> dict[str, tuple[str, str]]:
+    """Use a few web searches to find boards hiring for these roles, in `where` if given."""
     if not SERPER_API_KEY:
         return {}
     try:
         found, _queries, _skipped = await search_web_openings(roles[:2], [], 10, 60, frozenset(),
-                                                              max_queries=DISCOVERY_QUERIES)
+                                                              max_queries=max_queries, where=where)
     except SearchError:
         return {}
     out: dict[str, tuple[str, str]] = {}
@@ -233,41 +265,71 @@ async def gather(profile: Profile, roles: list[str], companies: list[str], exclu
     warnings: list[str] = []
     queries: list[str] = []
 
+    wanted = search_roles(roles, profile)
     company_boards, missing = await registry.resolve_many(companies[:MAX_BOARDS_PER_RUN])
-    if not companies:
-        company_boards.update(await _discover_boards(roles))
-        queries.append(f"discovery: {', '.join(roles[:2])} across ATS boards")
+    # Discover other companies' boards too, even when some are named: two named
+    # companies without a readable board should not be the whole search. A
+    # named list gets a smaller budget, since those companies come first.
+    where = next((l for l in profile.locations if l.strip()), "") if profile.work_mode != "remote" else ""
+    budget = DISCOVERY_QUERIES if not companies else DISCOVERY_QUERIES // 2
+    for company, board in (await _discover_boards(wanted, where, budget)).items():
+        if len(company_boards) >= MAX_BOARDS_PER_RUN:
+            break
+        company_boards.setdefault(company, board)
+    queries.append(f"discovery: {', '.join(wanted[:2])}{f' in {where}' if where else ''} across ATS boards")
 
-    board_openings, board_names, read_warnings = await _read_boards(company_boards, roles)
+    board_openings, board_names, read_warnings = await _read_boards(company_boards, wanted, board_places(profile))
     warnings += read_warnings
 
     # The shared index: matching postings on boards other users (or the poller) already read.
     terms = role_terms(roles)
-    if terms and len(company_boards) < 6:
+    if terms and len(companies) < 6:
         try:
-            extra = db.search_open_postings(terms, list(company_boards.values()), limit=600)
+            extra = db.search_open_postings(terms, list(company_boards.values()), limit=600,
+                                            require=INTERN_WORDS if intern_only(profile) else ())
             board_openings += [row_to_opening(r) for r in extra]
         except Exception as exc:
             log.warning("shared index search failed: %s", exc)
 
-    web, web_queries, web_notes = await _web_fallback(missing, roles, exclude, max_results)
+    web, web_queries, web_notes = await _web_fallback(missing, wanted, frozenset(), max_results)
     queries += web_queries
     warnings += web_notes
 
     # Dedupe on key; web results pointing at a board already read are the same posting.
     seen: set[str] = set()
     pool: list[ScoredOpening] = []
-    skipped = 0
+    shown: list[ScoredOpening] = []
     for o in board_openings + web:
         if o.key in seen:
             continue
         seen.add(o.key)
         if o.key in exclude or o.url in exclude:
-            skipped += 1
+            o.seen_before = True
+            shown.append(o)
             continue
         pool.append(o)
+    skipped = len(shown)
 
     kept, dropped = filters.apply(pool, profile, max_age_days, include_older)
+
+    # Too few left: widen before giving up, and say how. Openings already shown
+    # come back marked, then older ones; an empty page helps nobody.
+    widened: list[str] = []
+    if len(kept) < MIN_LEADS and shown:
+        again, _ = filters.apply(shown, profile, max_age_days, include_older)
+        if again:
+            kept += again
+            widened.append(f"{len(again)} you were shown before (marked “seen before”)")
+    if len(kept) < MIN_LEADS and not include_older and dropped.get("old"):
+        older, _ = filters.apply(pool + shown, profile, max_age_days, include_older=True)
+        have = {o.key for o in kept}
+        older = [o for o in older if o.key not in have]
+        if older:
+            kept += older
+            dropped["old"] -= len(older)
+            widened.append(f"{len(older)} posted more than {max_age_days} days ago")
+    if widened:
+        warnings.append("Few new matches, so the list also includes " + " and ".join(widened) + ".")
 
     # Descriptions fetched one-by-one only for the most relevant survivors.
     detail_less = [o for o in kept if o.source in boards.DETAIL_ATS and not o.description]
@@ -284,7 +346,15 @@ async def gather(profile: Profile, roles: list[str], companies: list[str], exclu
 
     return {"openings": kept, "dropped": dropped, "skipped": skipped, "warnings": warnings,
             "queries": queries, "boards": board_names, "missing": missing,
-            "pool_size": len(pool)}
+            "pool_size": len(pool), "levels": _levels(pool + shown)}
+
+
+def _levels(openings: list[ScoredOpening]) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for o in openings:
+        level = o.level or "unstated"
+        out[level] = out.get(level, 0) + 1
+    return out
 
 
 async def _fill_descriptions(openings: list[ScoredOpening]) -> None:

@@ -54,7 +54,12 @@ WORKDAY_MAX_PAGES = 5      # at most 100 postings per role search per tenant
 SMARTRECRUITERS_PAGE = 100
 SMARTRECRUITERS_MAX_PAGES = 5
 
-ATS_NAMES = ("greenhouse", "lever", "ashby", "workable", "smartrecruiters", "recruitee", "workday")
+ATS_NAMES = ("greenhouse", "lever", "ashby", "workable", "smartrecruiters", "recruitee", "workday", "ibm")
+# Boards searched per role rather than listed in full: a posting missing from
+# one read proves nothing about whether it closed.
+SEARCHED_ATS = ("workday", "ibm")
+IBM_SEARCH_URL = "https://www-api.ibm.com/search/api/v2"
+IBM_PAGE = 100
 
 
 class BoardError(RuntimeError):
@@ -423,12 +428,36 @@ async def _post(client: httpx.AsyncClient, url: str, body: dict) -> object:
         raise BoardError(f"{url}: not JSON") from exc
 
 
+def parse_ibm(payload: dict) -> list[Posting]:
+    """IBM's own careers search (careers.ibm.com), the API its search page calls."""
+    hits = ((payload or {}).get("hits") or {}).get("hits") or [] if isinstance(payload, dict) else []
+    out = []
+    for hit in hits:
+        src = hit.get("_source") or {}
+        url = src.get("url") or ""
+        job_id = url.rsplit("jobId=", 1)[-1] if "jobId=" in url else hit.get("_id", "")
+        title = (src.get("title") or "").strip()
+        if not title or not url:
+            continue
+        mode = (src.get("field_keyword_17") or "").strip()
+        out.append(Posting(
+            ats="ibm", slug="ibm", job_id=str(job_id), title=title, company="IBM", url=url, apply_url=url,
+            location=", ".join(x for x in (src.get("field_keyword_19") or "", mode) if x),
+            remote=True if mode.lower() == "remote" else None,
+            department=src.get("field_keyword_08") or "",
+            description=html_to_text(src.get("description")),
+            posted_at=(src.get("dcdate") or "")[:10] or None,
+        ))
+    return out
+
+
 async def fetch_board(client: httpx.AsyncClient, ats: str, slug: str,
-                      search: list[str] | None = None) -> list[Posting]:
+                      search: list[str] | None = None, where: list[str] | None = None) -> list[Posting]:
     """Every open posting on one board. Raises BoardError.
 
-    `search` only matters for Workday, which is searched per role instead of
-    listed in full: some tenants carry tens of thousands of postings.
+    `search` only matters for Workday and IBM, which are searched per role
+    instead of listed in full: some carry tens of thousands of postings.
+    `where` (place names) narrows IBM's search to those places.
     """
     if ats == "greenhouse":
         data = await _get(client, f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs",
@@ -476,6 +505,26 @@ async def fetch_board(client: httpx.AsyncClient, ats: str, slug: str,
                     break
                 await asyncio.sleep(0.3)      # unofficial endpoint: be gentle
         return out
+    if ats == "ibm":
+        out, seen = [], set()
+        for text in (search or [""])[:4]:
+            query: dict = {"must": [{"simple_query_string": {"query": text, "fields": ["title^3", "description"]}}]
+                           if text else [{"match_all": {}}]}
+            if where:
+                # IBM hires worldwide; without this most of the page is other countries.
+                query["filter"] = [{"bool": {"should": [
+                    {"wildcard": {"field_keyword_19": {"value": f"*{w.lower()}*", "case_insensitive": True}}}
+                    for w in where]}}]
+            query = {"bool": query}
+            data = await _post(client, IBM_SEARCH_URL, {
+                "appId": "careers", "scopes": ["careers2"], "query": query, "size": IBM_PAGE,
+                "_source": ["url", "title", "description", "dcdate", "field_keyword_08",
+                            "field_keyword_17", "field_keyword_19"]})
+            for p in parse_ibm(data):
+                if p.key not in seen:
+                    seen.add(p.key)
+                    out.append(p)
+        return out
     raise BoardError(f"Unknown ATS {ats!r}")
 
 
@@ -505,7 +554,8 @@ async def fill_details(postings: list[Posting], limit: int = 40) -> int:
     return sum(done)
 
 
-async def fetch_boards(boards: list[tuple[str, str]], search: list[str] | None = None
+async def fetch_boards(boards: list[tuple[str, str]], search: list[str] | None = None,
+                       where: list[str] | None = None
                        ) -> tuple[dict[tuple[str, str], list[Posting]], dict[tuple[str, str], str]]:
     """Fetch several boards concurrently. Returns ({board: postings}, {board: error})."""
     gate = asyncio.Semaphore(MAX_CONCURRENT)
@@ -516,7 +566,7 @@ async def fetch_boards(boards: list[tuple[str, str]], search: list[str] | None =
         async def one(ats: str, slug: str) -> None:
             async with gate:
                 try:
-                    results[(ats, slug)] = await fetch_board(client, ats, slug, search)
+                    results[(ats, slug)] = await fetch_board(client, ats, slug, search, where)
                 except BoardError as exc:
                     errors[(ats, slug)] = str(exc)
                 except Exception as exc:          # a malformed board never sinks a run
