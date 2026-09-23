@@ -23,6 +23,9 @@ cat > "$OUT" <<EOF
 /api/*   ${ORIGIN}/api/:splat   200!
 /login   ${ORIGIN}/login        200!
 /app     ${ORIGIN}/app          200!
+# The app's script comes from the backend too, so a frontend change ships with
+# the backend deploy instead of waiting for a separate Netlify deploy.
+/static/*  ${ORIGIN}/static/:splat  200!
 EOF
 
 echo "Proxying API to ${ORIGIN}:"
