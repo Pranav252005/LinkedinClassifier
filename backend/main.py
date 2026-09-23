@@ -33,6 +33,7 @@ import registry
 import resume as resume_parser
 import seeker
 import timing
+import verify
 from config import (
     FRONTEND_DIR,
     LOGIN_LIMIT,
@@ -507,7 +508,11 @@ async def _run_openings(req: SearchRequest, user: sqlite3.Row) -> OpeningsRespon
     # 6. Rank: embeddings over everything, full-description review of the top N.
     ranked, rank_warnings = await openings_pipeline.rank(got["openings"], profile, req.resume)
     warnings += rank_warnings
-    results = ranked[:max_results]
+    # 7. Read each top lead's posting and drop the ones it rules out.
+    results, checked_out, check_warnings = await verify.check(ranked, profile, max_results)
+    warnings += check_warnings
+    for reason, n in checked_out.items():
+        common["filtered"][reason] = common["filtered"].get(reason, 0) + n
     openings_pipeline.annotate_timing(results)
 
     rows = [(o.key, i, o.fit_score, json.dumps(o.features), o.url, f"{o.title} — {o.company}")

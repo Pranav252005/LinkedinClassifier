@@ -192,6 +192,47 @@ def pay_status(text: str) -> str:
     return ""
 
 
+# --- work mode -------------------------------------------------------------------------
+_HYBRID = re.compile(r"\bhybrid\b|\b\d\s*days?\s*(a|per|/)\s*week\s*(in|at|from)\s*(the\s*)?office\b", re.I)
+_ONSITE = re.compile(r"\bon[\s-]?site\b|\bin[\s-]office\b|\bwork\s+from\s+(the\s+|our\s+)?office\b|"
+                     r"\bin[\s-]person\b|\bnot\s+(a\s+)?remote\b|\bno\s+remote\b", re.I)
+
+
+def work_mode(location: str, text: str, remote: bool | None = None) -> str:
+    """remote | hybrid | onsite | "" (the posting does not say).
+
+    The location line is trusted first, since boards put "Remote" or "Hybrid"
+    there on purpose; the description only breaks the tie, and a stray
+    "remote" in it ("work with remote teams") is not taken as the mode.
+    """
+    loc = location or ""
+    if _HYBRID.search(loc):
+        return "hybrid"
+    if _REMOTE.search(loc) or remote is True:
+        return "remote"
+    t = text or ""
+    if _HYBRID.search(t):
+        return "hybrid"
+    if _ONSITE.search(loc) or _ONSITE.search(t):
+        return "onsite"
+    if re.search(r"\bfully\s+remote\b|\b100%\s+remote\b|\bremote[\s-](first|role|position)\b", t, re.I):
+        return "remote"
+    return ""
+
+
+def fits_work_mode(profile: Profile, mode: str, location: str, remote: bool | None) -> str | None:
+    """None if the posting fits the seeker's work mode, else the drop reason.
+    A posting that does not say is kept; the verify stage reads it in full."""
+    if profile.work_mode == "remote":
+        return "not_remote" if mode in ("onsite", "hybrid") else None
+    if profile.work_mode == "onsite":
+        if mode == "remote":
+            return "remote_only"
+        if profile.locations and location_matches(profile.locations, location, remote, False) is False:
+            return "location"
+    return None
+
+
 # --- age ------------------------------------------------------------------------------
 def age_days(posted_at: str | None, today: date | None = None) -> int | None:
     if not posted_at:
@@ -222,6 +263,8 @@ REASONS = {
     "location": "outside your locations",
     "sponsorship": "say they won't sponsor a visa",
     "unpaid": "unpaid",
+    "not_remote": "not remote",
+    "remote_only": "remote, not on-site",
     "old": "posted too long ago",
     "closed": "closed on the board",
 }
@@ -230,7 +273,7 @@ REASONS = {
 def judge(posting, profile: Profile, max_age_days: int = 30, include_older: bool = False,
           today: date | None = None) -> Verdict:
     """Keep or drop one posting. `posting` needs title, description, location,
-    remote, posted_at, and optionally level/min_years/pay already filled in."""
+    remote, posted_at, and optionally level/min_years/pay/work_mode already filled in."""
     level = posting.level or title_level(posting.title)
     years = posting.min_years if posting.min_years is not None else required_years(posting.description)
     wants_intern = "internship" in profile.job_types
@@ -258,9 +301,15 @@ def judge(posting, profile: Profile, max_age_days: int = 30, include_older: bool
             return Verdict(False, "years")
 
     if profile.locations:
-        match = location_matches(profile.locations, posting.location, posting.remote, profile.remote_ok)
+        remote_ok = profile.work_mode == "remote" or (profile.remote_ok and profile.work_mode != "onsite")
+        match = location_matches(profile.locations, posting.location, posting.remote, remote_ok)
         if match is False:
             return Verdict(False, "location")
+
+    mode = posting.work_mode or work_mode(posting.location, posting.description, posting.remote)
+    reason = fits_work_mode(profile, mode, posting.location, posting.remote)
+    if reason:
+        return Verdict(False, reason)
 
     if profile.needs_sponsorship and refuses_sponsorship(posting.description):
         return Verdict(False, "sponsorship")

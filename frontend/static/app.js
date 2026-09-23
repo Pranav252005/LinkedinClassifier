@@ -167,6 +167,7 @@ function paintProfile() {
   $('pRemote').checked = profile.remote_ok !== false;
   $('pSponsor').checked = !!profile.needs_sponsorship;
   $('pPaid').checked = !!profile.paid_only;
+  $('pMode').value = profile.work_mode || 'any';
   $('pCollege').value = profile.college || '';
   $('pGrad').value = profile.grad_year || '';
   $('profileSummary').textContent = profile.summary
@@ -187,6 +188,7 @@ function readProfileForm() {
   profile.remote_ok = $('pRemote').checked;
   profile.needs_sponsorship = $('pSponsor').checked;
   profile.paid_only = $('pPaid').checked;
+  profile.work_mode = $('pMode').value;
   profile.college = $('pCollege').value.trim();
   const grad = Number($('pGrad').value);
   profile.grad_year = grad >= 1970 && grad <= 2100 ? grad : null;
@@ -350,6 +352,12 @@ function renderOpenings(data) {
       : r.pay === 'unpaid'
         ? '<span class="badge web" title="the posting says it is unpaid">unpaid</span>'
         : '';
+    const mode = r.work_mode
+      ? `<span class="badge" title="${r.checked ? 'read from the posting page' : 'read from the listing'}">${esc(r.work_mode)}${r.location ? ` · ${esc(r.location)}` : ''}</span>`
+      : '';
+    const checked = r.checked
+      ? `<span class="badge live" title="${esc(r.check_note || 'the full posting was read to confirm mode, location and pay')}">checked</span>`
+      : '<span class="badge quick" title="the posting page was not read; mode, location and pay are unconfirmed">unchecked</span>';
     const quick = r.reviewed ? '' :
       '<span class="badge quick" title="ranked by similarity only; the full description was not reviewed">quick match</span>';
     return `<article class="opening">
@@ -368,7 +376,7 @@ function renderOpenings(data) {
         ${r.error ? `<div class="rowerr">${esc(r.error)}</div>` : ''}
       </div>
       <div class="opening-foot">
-        <div>${src}${pay}${quick}${when}${close}${seen}</div>
+        <div>${src}${checked}${mode}${pay}${quick}${when}${close}${seen}</div>
         <span class="foot-actions">
           ${fbButtons('opening', i, r.feedback)}
           <button type="button" class="btn ghost approach people-btn" data-i="${i}"
@@ -469,11 +477,11 @@ function downloadCsv() {
 
   if (mode === 'jobs') {
     name = 'openings.csv';
-    header = ['fit_score', 'title', 'company', 'source', 'url', 'location', 'pay', 'posted_at', 'closes_at',
+    header = ['fit_score', 'title', 'company', 'source', 'url', 'location', 'work_mode', 'pay', 'posted_at', 'closes_at',
               'first_seen', 'level_fit', 'must_haves_met', 'skills_matched', 'skills_missing',
               'why', 'gap', 'verified', 'note'];
     lines = lastRun.results.map((r) => [
-      r.fit_score ?? '', r.title, r.company, r.source, r.apply_url || r.url, r.location, r.pay || '', r.posted_at ?? '',
+      r.fit_score ?? '', r.title, r.company, r.source, r.apply_url || r.url, r.location, r.work_mode || '', r.pay || '', r.posted_at ?? '',
       r.closes_at ?? '', r.first_seen ?? '', r.level_fit ?? '',
       r.must_haves_met == null ? '' : r.must_haves_met.toFixed(3),
       (r.skills_matched || []).join('; '), (r.skills_missing || []).join('; '),

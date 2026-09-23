@@ -45,6 +45,9 @@ class Profile(BaseModel):
     needs_sponsorship: bool = False
     # Hide postings that say they are unpaid. Ones that do not say are kept.
     paid_only: bool = False
+    # any: no preference. remote: remote roles only. onsite: roles you go into
+    # an office for (hybrid counts), and only in one of `locations`.
+    work_mode: Literal["any", "remote", "onsite"] = "any"
     college: str = Field(default="", max_length=120)
     grad_year: Optional[int] = Field(default=None, ge=1970, le=2100)
     summary: str = Field(default="", max_length=400)
@@ -135,6 +138,11 @@ class Opening(BaseModel):
     level: str = ""           # intern | entry | mid | senior, read from the posting
     min_years: Optional[int] = None
     pay: str = ""             # paid | unpaid | "" (not stated), read from the posting
+    work_mode: str = ""       # remote | hybrid | onsite | "" (not stated)
+    # Set once the verify stage has read the whole posting (verify.py).
+    checked: bool = False
+    check_note: Optional[str] = None
+    in_location: Optional[bool] = None
     verified: bool = False    # listed by the board's own API during this run
     # The full description. Used for scoring and never sent to the browser --
     # the board link has it, and forty of them would bloat every response.

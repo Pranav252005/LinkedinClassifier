@@ -66,6 +66,7 @@ def to_opening(p: boards.Posting, company: str = "", first_seen: str | None = No
         closes_at=p.closes_at, first_seen=first_seen,
         level=filters.title_level(p.title), min_years=filters.required_years(p.description),
         pay=filters.pay_status(f"{p.title}\n{p.description}"),
+        work_mode=filters.work_mode(p.location, p.description, p.remote),
         verified=True,
     )
 
@@ -80,6 +81,8 @@ def row_to_opening(row) -> ScoredOpening:
         posted_at=row["posted_at"], closes_at=row["closes_at"], first_seen=row["first_seen"],
         level=filters.title_level(row["title"]), min_years=filters.required_years(row["description"] or ""),
         pay=filters.pay_status(f"{row['title']}\n{row['description'] or ''}"),
+        work_mode=filters.work_mode(row["location"] or "", row["description"] or "",
+                                    None if row["remote"] is None else bool(row["remote"])),
         verified=True,
     )
 
@@ -209,7 +212,8 @@ async def _web_fallback(companies: list[str], roles: list[str], exclude: frozens
 
     out = [ScoredOpening(**{**o.model_dump(), "key": o.key or o.url, "verified": False,
                             "level": filters.title_level(o.title),
-                            "pay": filters.pay_status(f"{o.title}\n{o.snippet}")})
+                            "pay": filters.pay_status(f"{o.title}\n{o.snippet}"),
+                            "work_mode": filters.work_mode(o.location, o.snippet, o.remote)})
            for o, ok in zip(found, alive) if ok]
     dead = len(found) - len(out)
     notes = []
@@ -305,6 +309,7 @@ async def _fill_descriptions(openings: list[ScoredOpening]) -> None:
             o.snippet = p.description[:300].replace("\n", " ")
             o.min_years = filters.required_years(p.description)
             o.pay = filters.pay_status(f"{o.title}\n{p.description}")
+            o.work_mode = filters.work_mode(o.location, p.description, o.remote)
             if p.posted_at and not p.posted_approx:
                 o.posted_at = p.posted_at
         if p.extra.get("closed"):

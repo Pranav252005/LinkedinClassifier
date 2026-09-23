@@ -135,3 +135,29 @@ def test_paid_only_drops_unpaid_keeps_unknown():
                          today=TODAY).reason == "unpaid"
     assert filters.judge(_o("Software Engineer", desc="Build things."), paid_only, today=TODAY).keep
     assert filters.judge(_o("Software Engineer", desc="This role is unpaid."), NEW_GRAD, today=TODAY).keep
+
+
+@pytest.mark.parametrize("location,text,remote,mode", [
+    ("Remote - India", "", None, "remote"),
+    ("Bengaluru (Hybrid)", "", None, "hybrid"),
+    ("Bengaluru", "You will work 3 days a week in the office.", None, "hybrid"),
+    ("Bengaluru", "This is an on-site role.", None, "onsite"),
+    ("", "This is a fully remote position.", None, "remote"),
+    ("Bengaluru", "Collaborate with remote teams.", None, ""),
+    ("", "", True, "remote"),
+])
+def test_work_mode(location, text, remote, mode):
+    assert filters.work_mode(location, text, remote) == mode
+
+
+def test_work_mode_filter():
+    remote = NEW_GRAD.model_copy(update={"work_mode": "remote"})
+    onsite = NEW_GRAD.model_copy(update={"work_mode": "onsite", "locations": ["Bangalore"]})
+    j = lambda o, p: filters.judge(o, p, today=TODAY)
+    assert j(_o("Software Engineer", location="Remote"), remote).keep
+    assert j(_o("Software Engineer", location="Pune", desc="This is an on-site role."), remote).reason == "not_remote"
+    assert j(_o("Software Engineer", location="Bengaluru"), onsite).keep
+    assert j(_o("Software Engineer", location="Remote - India"), onsite).reason == "location"
+    assert j(_o("Software Engineer", location="Mumbai"), onsite).reason == "location"
+    # Not stated either way: kept for the verify stage to read.
+    assert j(_o("Software Engineer"), remote).keep
