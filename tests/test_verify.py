@@ -36,3 +36,39 @@ def test_unknown_is_kept():
     o = _o()
     verify._apply(o, {"work_mode": "unknown", "in_candidate_location": None, "pay": "unknown"})
     assert verify.rules_out(o, Profile(work_mode="remote", paid_only=True, locations=["Bangalore"])) is None
+
+
+def _resp(url, status=200, body="", final=None):
+    import httpx
+    return httpx.Response(status, text=body, request=httpx.Request("GET", final or url))
+
+
+def test_page_closed():
+    url = "https://jobs.example.com/acme/jobs/123"
+    assert verify.page_closed(url, _resp(url, 404))
+    assert not verify.page_closed(url, _resp(url, 403))            # a bot wall is not evidence
+    assert verify.page_closed(url, _resp(url, final="https://jobs.example.com/acme"))
+    assert verify.page_closed(url, _resp(url, body="Sorry, this job has expired."))
+    assert verify.page_closed(url, _resp(url, body='{"@type":"JobPosting","validThrough":"2020-01-31"}'))
+    assert not verify.page_closed(url, _resp(url, body='{"@type":"JobPosting","validThrough":"2099-01-31"}'))
+    assert not verify.page_closed(url, _resp(url, body="Apply now: Software Engineer Intern"))
+
+
+def test_board_record_says_closed():
+    import httpx
+    closed = httpx.Response(200, json={"jobPostingInfo": {"canApply": False}})
+    assert verify._record_closed("workday", closed)
+    assert verify._record_closed("smartrecruiters", httpx.Response(200, json={"active": False}))
+    assert not verify._record_closed("smartrecruiters", httpx.Response(200, json={"active": True}))
+    assert verify._record_closed("microsoft", httpx.Response(200, json={"data": {}}))
+
+
+def test_malformed_json_is_retried_once(monkeypatch):
+    import asyncio
+    import openrouter
+    answers = iter(["Sure! Here you go: [{broken", '{"results": [{"i": 0}]}'])
+
+    async def fake_chat(messages, **kw):
+        return next(answers)
+    monkeypatch.setattr(openrouter, "chat", fake_chat)
+    assert asyncio.run(openrouter.chat_json_list([])) == [{"i": 0}]

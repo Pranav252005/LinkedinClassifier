@@ -59,8 +59,9 @@ class ProfileRequest(BaseModel):
 
 # --- search ------------------------------------------------------------------
 class SearchRequest(BaseModel):
-    # "people" finds humans to contact; "jobs" finds openings you can apply to.
-    mode: Literal["people", "jobs"] = "people"
+    # "people" finds humans to contact; "jobs" finds openings you can apply to;
+    # "gigs" finds freelance projects (Upwork).
+    mode: Literal["people", "jobs", "gigs"] = "people"
     resume: str = Field(..., min_length=20, max_length=20_000)
     companies: list[str] = Field(default_factory=list)
     titles: list[str] = Field(default_factory=list)
@@ -146,6 +147,9 @@ class Opening(BaseModel):
     # Shown to this user on an earlier run; back only because too little was new.
     seen_before: bool = False
     verified: bool = False    # listed by the board's own API during this run
+    # The site refused an automated visit (Indeed, Glassdoor, Upwork), so the
+    # link could not be confirmed open. Shown as such, never as live.
+    unconfirmed: bool = False
     # The full description. Used for scoring and never sent to the browser --
     # the board link has it, and forty of them would bloat every response.
     description: str = Field(default="", exclude=True)
@@ -261,7 +265,7 @@ class ResumeUploadResponse(BaseModel):
 
 # --- feedback ------------------------------------------------------------------
 class FeedbackRequest(BaseModel):
-    kind: Literal["person", "opening"]
+    kind: Literal["person", "opening", "gig"]
     item_key: str = Field(..., max_length=600)
     run_id: Optional[int] = None
     url: str = Field(default="", max_length=600)

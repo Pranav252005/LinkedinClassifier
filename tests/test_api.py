@@ -16,8 +16,10 @@ import boards
 import db
 import embeddings
 import main
+import openrouter
 import ranking
 import registry
+import verify
 from conftest import load
 from schemas import Candidate
 
@@ -48,9 +50,13 @@ def client(monkeypatch):
         return json.dumps([{"i": i, "must_haves_met": 0.8 - 0.1 * i, "level_fit": "fit",
                             "skills_matched": ["Python"], "skills_missing": ["Kubernetes"],
                             "why": "Uses Python for risk", "gap": ""} for i in range(n)])
-    monkeypatch.setattr(ranking, "chat", fake_chat)
+    monkeypatch.setattr(openrouter, "chat", fake_chat)
     monkeypatch.setattr(ranking, "OPENROUTER_API_KEY", "test")
     monkeypatch.setattr(ranking.learned, "current", lambda kind: None)
+
+    async def still_open(client, o):
+        return True
+    monkeypatch.setattr(verify, "still_open", still_open)
 
     with TestClient(main.app) as c:
         yield c

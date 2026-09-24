@@ -41,3 +41,36 @@ def test_resolve_uses_cache(monkeypatch):
     # A recent miss is cached too.
     db.save_board("Razorpay", None, None, "search")
     assert asyncio.run(registry.resolve("Razorpay")) is None
+
+
+def test_slug_matches_only_the_companys_own_board():
+    m = registry.slug_matches
+    assert m("Razorpay", "razorpaysoftwareprivatelimited")
+    assert m("Zomato", "Zomato1")
+    assert m("CrowdStrike", "crowdstrike|wd5|crowdstrikecareers")
+    # Boards a search once returned because a snippet mentioned the company.
+    assert not m("Flipkart", "philips|wd3|jobs-and-careers")
+    assert not m("Microsoft", "galvestoncountytx|wd503|CountyofGalvestonCareers")
+    assert not m("Amazon", "mellow-sleep")
+    assert not m("Ola", "globaldimensionsllc")
+    assert not m("Ola", "olasolar")                 # a short name is not a prefix match
+
+
+def test_a_mislabelled_cached_board_is_looked_up_again(monkeypatch):
+    import asyncio
+    import db
+    db.save_board("Flipkart", "workday", "philips|wd3|jobs-and-careers", "search")
+    db.save_board("Razorpay", "greenhouse", "razorpaysoftwareprivatelimited", "search")
+
+    async def no_guess(company):
+        return None
+    monkeypatch.setattr(registry, "_guess", no_guess)
+    assert asyncio.run(registry.resolve("Razorpay", allow_search=False)) == \
+        ("greenhouse", "razorpaysoftwareprivatelimited")
+    assert asyncio.run(registry.resolve("Flipkart", allow_search=False)) is None
+
+
+def test_in_house_careers_sites_resolve_without_a_lookup():
+    import asyncio
+    for name, ats in (("Amazon", "amazon"), ("AWS", "amazon"), ("Microsoft", "microsoft"), ("Google", "google")):
+        assert asyncio.run(registry.resolve(name, allow_search=False)) == (ats, ats)

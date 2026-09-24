@@ -6,7 +6,7 @@ const splitList = (s) => s.split(',').map((v) => v.trim()).filter(Boolean);
 
 let account = null;
 let lastRun = null;
-let mode = 'jobs';   // 'jobs' = openings to apply to, 'people' = contacts
+let mode = 'jobs';   // 'jobs' = openings to apply to, 'people' = contacts, 'gigs' = freelance projects
 
 async function api(path, options = {}) {
   const res = await fetch(path, options);
@@ -325,6 +325,8 @@ function reasonsLine(r) {
 
 function renderOpenings(data) {
   lastRun = data;
+  const gigs = mode === 'gigs';
+  const noun = gigs ? 'gig' : 'opening';
   const notes = (data.warnings || []).map((w) => `<div class="note">${esc(w)}</div>`).join('');
 
   if (!data.results.length) {
@@ -346,7 +348,9 @@ function renderOpenings(data) {
       : '';
     const src = r.verified
       ? `<span class="badge live" title="listed on the company's own job board during this run">live · ${esc(r.source)}</span>`
-      : `<span class="badge web" title="found by web search; the company's board could not be read">web result</span>`;
+      : r.unconfirmed
+        ? `<span class="badge quick" title="${esc(r.source)} blocks automated checks, so this could not be confirmed open; open it to check">${esc(r.source)} · not confirmed open</span>`
+        : `<span class="badge web" title="found by web search and opened to check it is still accepting applications">web result · ${esc(r.source)}</span>`;
     const pay = r.pay === 'paid'
       ? '<span class="badge live" title="the posting mentions pay, a salary or a stipend">paid</span>'
       : r.pay === 'unpaid'
@@ -381,11 +385,11 @@ function renderOpenings(data) {
       <div class="opening-foot">
         <div>${src}${again}${checked}${mode}${pay}${quick}${when}${close}${seen}</div>
         <span class="foot-actions">
-          ${fbButtons('opening', i, r.feedback)}
-          <button type="button" class="btn ghost approach people-btn" data-i="${i}"
-            title="The recruiter, manager and team members for this role">People for this role</button>
-          <button type="button" class="btn ghost approach" data-i="${i}">How to approach</button>
-          <a class="apply" href="${esc(r.apply_url || r.url)}" target="_blank" rel="noopener noreferrer">Open application →</a>
+          ${fbButtons(gigs ? 'gig' : 'opening', i, r.feedback)}
+          ${gigs ? '' : `<button type="button" class="btn ghost approach people-btn" data-i="${i}"
+            title="The recruiter, manager and team members for this role">People for this role</button>`}
+          <button type="button" class="btn ghost approach" data-i="${i}">${gigs ? 'Draft a proposal' : 'How to approach'}</button>
+          <a class="apply" href="${esc(r.apply_url || r.url)}" target="_blank" rel="noopener noreferrer">${gigs ? 'Open gig' : 'Open application'} →</a>
         </span>
       </div>
     </article>`;
@@ -398,9 +402,9 @@ function renderOpenings(data) {
 
   $('out').innerHTML = `
     <div class="results-head">
-      <h2>${data.count} opening${data.count === 1 ? '' : 's'}, ranked by fit</h2>
+      <h2>${data.count} ${noun}${data.count === 1 ? '' : 's'}, ranked by fit</h2>
       <span class="foot-actions">
-        <button class="btn ghost" id="saveSearch" title="Check these boards daily and alert you to new matches">Alert me to new matches</button>
+        ${gigs ? '' : '<button class="btn ghost" id="saveSearch" title="Check these boards daily and alert you to new matches">Alert me to new matches</button>'}
         <button class="btn ghost" id="csv">Download CSV</button>
       </span>
     </div>
@@ -411,7 +415,7 @@ function renderOpenings(data) {
     <details><summary>${(data.boards_read || []).length} job boards read${(data.queries_run || []).length ? `, ${data.queries_run.length} web searches` : ''}</summary>
       <div>${(data.boards_read || []).map((b) => `<div>${esc(b)}</div>`).join('')}${queries}</div></details>`;
   $('csv').addEventListener('click', downloadCsv);
-  $('saveSearch').addEventListener('click', saveSearch);
+  if (!gigs) $('saveSearch').addEventListener('click', saveSearch);
   bindApproach();
   bindPeople();
   bindFeedback(data.results, (r) => r.key, (r) => r.url, (r) => `${r.title} — ${r.company}`);
@@ -478,8 +482,8 @@ function downloadCsv() {
   const cell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
   let header, lines, name;
 
-  if (mode === 'jobs') {
-    name = 'openings.csv';
+  if (mode !== 'people') {
+    name = mode === 'gigs' ? 'gigs.csv' : 'openings.csv';
     header = ['fit_score', 'title', 'company', 'source', 'url', 'location', 'work_mode', 'pay', 'posted_at', 'closes_at',
               'first_seen', 'level_fit', 'must_haves_met', 'skills_matched', 'skills_missing',
               'why', 'gap', 'verified', 'note'];
@@ -488,7 +492,7 @@ function downloadCsv() {
       r.closes_at ?? '', r.first_seen ?? '', r.level_fit ?? '',
       r.must_haves_met == null ? '' : r.must_haves_met.toFixed(3),
       (r.skills_matched || []).join('; '), (r.skills_missing || []).join('; '),
-      r.why ?? '', r.gap ?? '', r.verified ? 'yes' : 'no', r.error ?? '',
+      r.why ?? '', r.gap ?? '', r.verified ? 'yes' : r.unconfirmed ? 'unconfirmed' : 'no', r.error ?? '',
     ].map(cell).join(','));
   } else {
     name = 'contacts.csv';
@@ -591,7 +595,7 @@ function bindApproach() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            kind: mode === 'jobs' ? 'opening' : 'person',
+            kind: mode === 'people' ? 'person' : 'opening',
             resume: $('resume').value.trim(),
             role_target: $('role').value,
             name: r.name || '',
@@ -795,6 +799,12 @@ const MODE_COPY = {
     titles: 'Roles',
     titlesHint: 'software engineer intern',
   },
+  gigs: {
+    go: 'Find gigs',
+    note: 'Finds recent Upwork projects that fit your skills. Upwork blocks automated checks, so open each one to confirm it is still taking proposals.',
+    titles: 'Skills or project types',
+    titlesHint: 'fastapi, data scraping',
+  },
   people: {
     go: 'Find people',
     note: 'Finds people who can refer or screen you — recruiters, hiring managers, engineers on the team.',
@@ -845,7 +855,7 @@ $('form').addEventListener('submit', async (e) => {
     banner('With the agent off, you need to name at least one company yourself.');
     return;
   }
-  if (!useAgent && !companies.length && !splitList($('titles').value).length) {
+  if (mode === 'jobs' && !useAgent && !companies.length && !splitList($('titles').value).length) {
     banner('With the agent off, name at least one role or company to search for.');
     return;
   }
@@ -877,7 +887,7 @@ $('form').addEventListener('submit', async (e) => {
     account.runs_used = data.runs_used;
     account.runs_allowed = data.runs_allowed;
     paintAccount();
-    (mode === 'jobs' ? renderOpenings : render)(data);
+    (mode === 'people' ? render : renderOpenings)(data);
   } catch (err) {
     $('out').innerHTML = `<div class="note bad">${esc(err.message)}</div>`;
     if (/searches this month/i.test(err.message) && !$('upgrade').hidden) {

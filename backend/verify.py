@@ -2,8 +2,11 @@
 
 The hard filters (filters.py) only see what a board's API or a search snippet
 says, and plenty of postings leave "Remote?", "Where?" and "Paid?" to the page.
-This stage opens each top lead's link when the full text is not already in
-hand, gives the model the whole posting, and asks three narrow questions:
+This stage first confirms each top lead is still open -- through the board's
+own record of the posting where it has one, else by opening the page -- so an
+expired or filled posting is never shown. It fills in the full text when only
+a snippet is in hand, gives the model the whole posting, and asks three narrow
+questions:
 
   work_mode   remote | hybrid | onsite | unknown
   city        where the seeker would work, if on-site or hybrid
@@ -19,15 +22,21 @@ from __future__ import annotations
 import asyncio
 import html
 import re
+from datetime import datetime, timezone
 
 import httpx
 
+import boards
+import db
 import filters
 from config import OPENROUTER_API_KEY, OPENROUTER_SCORING_MODEL
-from openrouter import OpenRouterError, chat, parse_json
+from openrouter import OpenRouterError, chat_json_list
 from schemas import Profile, ScoredOpening
 
 BATCH = 5
+# Job sites serve a bot wall to anything that does not look like a browser.
+BROWSER_AGENT = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                 "Chrome/126.0 Safari/537.36")
 PAGE_CHARS = 5000
 # Descriptions shorter than this are snippets; the page has the real text.
 MIN_DESCRIPTION = 600
@@ -42,19 +51,86 @@ def page_text(body: str) -> str:
     return " ".join(html.unescape(_TAGS.sub(" ", body)).split())
 
 
-async def _fetch(client: httpx.AsyncClient, o: ScoredOpening) -> None:
-    """Fill o.description from the posting page when only a snippet is known."""
-    if len(o.description) >= MIN_DESCRIPTION:
-        return
+_GONE_PHRASES = ("no longer accepting", "no longer available", "position has been filled",
+                 "job you are looking for", "job not found", "posting has expired", "this job has expired",
+                 "job has been closed", "this position is no longer", "this job is no longer",
+                 "errorhasstatus: true")        # Google's results page for a removed job
+_VALID_THROUGH = re.compile(r'"validThrough"\s*:\s*"(\d{4}-\d{2}-\d{2})')
+
+
+def page_closed(url: str, resp: httpx.Response) -> bool:
+    """Whether a posting page says the posting is gone. A page that could not
+    be read for other reasons (a bot wall, a 500) is not evidence either way."""
+    if resp.status_code in (404, 410):
+        return True
+    if resp.status_code >= 400:
+        return False
+    # Boards bounce a closed posting to the careers index or a "no longer
+    # available" page; the posting id vanishing from the final URL is the tell.
+    if any(tell in str(resp.url) for tell in ("expired_jd_redirect", "error=true")):
+        return True                             # LinkedIn's and Greenhouse's bounce for a closed posting
+    final = str(resp.url).split("?", 1)[0].rstrip("/")
+    if final.count("/") < url.split("?", 1)[0].rstrip("/").count("/") - 1:
+        return True
+    body = resp.text[:60000]
+    # Structured data many career sites embed for search engines.
+    until = _VALID_THROUGH.search(body)
+    if until and until.group(1) < datetime.now(timezone.utc).date().isoformat():
+        return True
+    low = body.lower()
+    return any(p in low for p in _GONE_PHRASES)
+
+
+def _record_closed(source: str, resp: httpx.Response) -> bool:
+    """Whether a board's own record of a posting (boards.detail_url) says it closed."""
     try:
-        resp = await client.get(o.apply_url or o.url)
+        data = resp.json()
+    except ValueError:
+        return False
+    if not isinstance(data, dict):
+        return False
+    if source == "smartrecruiters":
+        return data.get("active") is False
+    if source == "workday":
+        info = data.get("jobPostingInfo") or {}
+        return info.get("canApply") is False or info.get("posted") is False
+    if source == "microsoft":
+        return not (data.get("data") or {}).get("id")
+    return False
+
+
+async def still_open(client: httpx.AsyncClient, o: ScoredOpening) -> bool | None:
+    """Confirm a lead is still open, filling o.description from its page when
+    only a snippet is known. False: gone. True: confirmed. None: could not tell."""
+    verdict = None
+    record = boards.detail_url(o.key, o.url) if o.verified else ""
+    if record:
+        try:
+            resp = await client.get(record, headers={"Accept": "application/json"})
+            if resp.status_code in (404, 410) or (resp.status_code < 400 and _record_closed(o.source, resp)):
+                return False
+            if resp.status_code < 400:
+                verdict = True
+        except httpx.HTTPError:
+            pass
+    short = len(o.description) < MIN_DESCRIPTION
+    if verdict and not short:
+        return True
+    url = o.url or o.apply_url
+    try:
+        resp = await client.get(url)
     except httpx.HTTPError:
-        return
-    if resp.status_code < 400 and "html" in resp.headers.get("content-type", "html"):
+        return verdict
+    if page_closed(url, resp):
+        return False
+    if resp.status_code >= 400:
+        return verdict
+    if short and "html" in resp.headers.get("content-type", "html"):
         text = page_text(resp.text)
         # Script-rendered boards return a shell; keep the snippet over that.
         if len(text) > len(o.description) + 200:
             o.description = text
+    return True
 
 
 def _prompt(profile: Profile, batch: list[ScoredOpening]) -> str:
@@ -126,17 +202,12 @@ def rules_out(o: ScoredOpening, profile: Profile) -> str | None:
 async def _check_batch(profile: Profile, batch: list[ScoredOpening], gate: asyncio.Semaphore) -> str | None:
     try:
         async with gate:
-            raw = await chat([{"role": "system", "content": SYSTEM},
-                              {"role": "user", "content": _prompt(profile, batch)}],
-                             model=OPENROUTER_SCORING_MODEL, max_tokens=120 * len(batch) + 200,
-                             temperature=0.0)
-        data = parse_json(raw)
+            data = await chat_json_list([{"role": "system", "content": SYSTEM},
+                                         {"role": "user", "content": _prompt(profile, batch)}],
+                                        model=OPENROUTER_SCORING_MODEL, max_tokens=120 * len(batch) + 200,
+                                        temperature=0.0, thinking="low")
     except OpenRouterError as exc:
         return str(exc)
-    if isinstance(data, dict):
-        data = next((v for v in data.values() if isinstance(v, list)), None)
-    if not isinstance(data, list):
-        return "The check model did not return a JSON array."
     by_index: dict[int, object] = {}
     for position, entry in enumerate(data):
         idx = entry.get("i") if isinstance(entry, dict) else None
@@ -146,29 +217,47 @@ async def _check_batch(profile: Profile, batch: list[ScoredOpening], gate: async
     return None
 
 
+def _forget_closed(o: ScoredOpening) -> None:
+    if not o.verified:
+        return
+    try:
+        db.close_posting(o.key)
+    except Exception:
+        pass                                    # the index is an optimisation, not a dependency
+
+
 async def check(ranked: list[ScoredOpening], profile: Profile, want: int
                 ) -> tuple[list[ScoredOpening], dict[str, int], list[str]]:
     """Check leads in rank order until `want` survive or they run out.
 
     Returns (kept in rank order, {reason: count dropped}, warnings).
     """
-    if not OPENROUTER_API_KEY:
-        return ranked[:want], {}, ["OPENROUTER_API_KEY is not set — leads were not checked against their pages."]
-
     kept: list[ScoredOpening] = []
     dropped: dict[str, int] = {}
     errors: list[str] = []
     gate = asyncio.Semaphore(4)
     pos = 0
     async with httpx.AsyncClient(timeout=12.0, follow_redirects=True,
-                                 headers={"User-Agent": "Mozilla/5.0 (LeadClassifier)"}) as client:
+                                 headers={"User-Agent": BROWSER_AGENT}) as client:
         # Rounds of up to 2x what is still missing, so a few drops get backfilled
         # without paying to check the whole ranked list.
         limit = min(len(ranked), 3 * want)
         while len(kept) < want and pos < limit:
             chunk = ranked[pos:min(limit, pos + max(BATCH, 2 * (want - len(kept))))]
             pos += len(chunk)
-            await asyncio.gather(*(_fetch(client, o) for o in chunk))
+            open_now = await asyncio.gather(*(still_open(client, o) for o in chunk))
+            for o, is_open in zip(chunk, open_now):
+                if is_open is False:
+                    dropped["closed"] = dropped.get("closed", 0) + 1
+                    _forget_closed(o)
+                elif is_open:
+                    o.unconfirmed = False
+                # None leaves it as it was: a page confirmed open minutes ago by
+                # the search step stays confirmed if the site now refuses a visit.
+            chunk = [o for o, is_open in zip(chunk, open_now) if is_open is not False]
+            if not OPENROUTER_API_KEY:
+                kept += chunk
+                continue
             errors += [e for e in await asyncio.gather(*(
                 _check_batch(profile, chunk[i:i + BATCH], gate) for i in range(0, len(chunk), BATCH))) if e]
             for o in chunk:
@@ -178,6 +267,8 @@ async def check(ranked: list[ScoredOpening], profile: Profile, want: int
                 else:
                     kept.append(o)
     warnings = []
+    if not OPENROUTER_API_KEY:
+        warnings.append("OPENROUTER_API_KEY is not set — mode, location and pay were not read from the postings.")
     if errors:
         warnings.append(f"{len(errors)} check batch(es) failed ({errors[0]}); those leads are unverified.")
     note = filters.describe(dropped)

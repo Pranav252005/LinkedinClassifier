@@ -18,6 +18,11 @@ which is the dedupe key everywhere downstream.
   recruitee        {slug}.recruitee.com/api/offers/
   workday          {tenant}.{wdN}.myworkdayjobs.com/wday/cxs/{tenant}/{site}/jobs
 
+The largest employers run careers sites of their own instead of a hosted ATS.
+Four are read through the JSON their own search pages call: IBM, Amazon
+(amazon.jobs), Microsoft (apply.careers.microsoft.com) and Google, whose
+results page carries its data inline.
+
 Workday is unofficial -- it is the JSON behind Workday's own careers UI, not a
 published API -- so it is polled gently, searched by role rather than listed in
 full, and treated as best-effort. It matters because many Indian employers run
@@ -31,6 +36,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import html
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -45,21 +51,45 @@ USER_AGENT = "LeadClassifier/0.3 (+job board reader)"
 MAX_CONCURRENT = 6
 MAX_DESCRIPTION = 12_000
 
-# SmartRecruiters and Workday list postings without descriptions; details are
-# fetched one request per posting, so only for the ones that survive filtering.
-DETAIL_ATS = ("smartrecruiters", "workday")
+# SmartRecruiters, Workday and Microsoft list postings without descriptions;
+# details are fetched one request per posting, so only for survivors of filtering.
+DETAIL_ATS = ("smartrecruiters", "workday", "microsoft")
 
 WORKDAY_PAGE = 20          # Workday rejects larger pages
 WORKDAY_MAX_PAGES = 5      # at most 100 postings per role search per tenant
 SMARTRECRUITERS_PAGE = 100
 SMARTRECRUITERS_MAX_PAGES = 5
 
-ATS_NAMES = ("greenhouse", "lever", "ashby", "workable", "smartrecruiters", "recruitee", "workday", "ibm")
+ATS_NAMES = ("greenhouse", "lever", "ashby", "workable", "smartrecruiters", "recruitee", "workday",
+             "ibm", "amazon", "microsoft", "google")
 # Boards searched per role rather than listed in full: a posting missing from
 # one read proves nothing about whether it closed.
-SEARCHED_ATS = ("workday", "ibm")
+SEARCHED_ATS = ("workday", "ibm", "amazon", "microsoft", "google")
 IBM_SEARCH_URL = "https://www-api.ibm.com/search/api/v2"
 IBM_PAGE = 100
+AMAZON_SEARCH_URL = "https://www.amazon.jobs/en/search.json"
+AMAZON_PAGE = 100
+AMAZON_MAX_PAGES = 2
+MICROSOFT_BASE = "https://apply.careers.microsoft.com"
+MICROSOFT_PAGE = 10         # fixed by the API
+MICROSOFT_MAX_PAGES = 5
+GOOGLE_RESULTS_URL = "https://www.google.com/about/careers/applications/jobs/results"
+GOOGLE_PAGE = 20            # fixed by the site
+GOOGLE_MAX_PAGES = 3
+# Country codes the in-house sites filter by, from the place names a seeker gives.
+_COUNTRIES = {
+    "IND": {"india", "bengaluru", "bangalore", "mumbai", "pune", "hyderabad", "chennai", "delhi",
+            "new delhi", "gurgaon", "gurugram", "noida", "kolkata", "ahmedabad", "jaipur", "kochi"},
+    "USA": {"united states", "usa", "us", "new york", "san francisco", "seattle", "bay area"},
+    "GBR": {"united kingdom", "uk", "london", "england"},
+}
+_COUNTRY_NAMES = {"IND": "India", "USA": "United States", "GBR": "United Kingdom"}
+
+
+def country_of(where: list[str] | None) -> str | None:
+    """The one ISO-3 country every place in `where` belongs to, if they agree."""
+    found = {code for w in where or [] for code, names in _COUNTRIES.items() if w.strip().lower() in names}
+    return found.pop() if len(found) == 1 else None
 
 
 class BoardError(RuntimeError):
@@ -316,6 +346,8 @@ def parse_recruitee(slug: str, payload: dict) -> list[Posting]:
     for job in (payload or {}).get("offers") or []:
         if job.get("status") not in (None, "published"):
             continue
+        if "(sample)" in (job.get("title") or "").lower():
+            continue                    # the vendor's demo content, not a job
         job_id = str(job.get("id") or "").strip()
         title = (job.get("title") or "").strip()
         if not job_id or not title:
@@ -398,12 +430,19 @@ def _client() -> httpx.AsyncClient:
     )
 
 
+RETRY_AFTER_429 = (2.0, 5.0)   # seconds; a busy careers API usually recovers within these
+
+
 async def _get(client: httpx.AsyncClient, url: str, **kw) -> object:
-    meter.current().board_requests += 1
-    try:
-        resp = await client.get(url, **kw)
-    except httpx.HTTPError as exc:
-        raise BoardError(f"{url}: {exc}") from exc
+    for wait in (*RETRY_AFTER_429, None):
+        meter.current().board_requests += 1
+        try:
+            resp = await client.get(url, **kw)
+        except httpx.HTTPError as exc:
+            raise BoardError(f"{url}: {exc}") from exc
+        if resp.status_code != 429 or wait is None:
+            break
+        await asyncio.sleep(wait)
     if resp.status_code == 404:
         raise BoardError(f"{url}: board not found")
     if resp.status_code >= 400:
@@ -449,6 +488,109 @@ def parse_ibm(payload: dict) -> list[Posting]:
             posted_at=(src.get("dcdate") or "")[:10] or None,
         ))
     return out
+
+
+def _add_new(out: list[Posting], seen: set[str], batch: list[Posting]) -> None:
+    for p in batch:
+        if p.key not in seen:
+            seen.add(p.key)
+            out.append(p)
+
+
+_US_DATE = re.compile(r"^([A-Z][a-z]+)\s+(\d{1,2}),\s+(\d{4})$")
+
+
+def parse_amazon(payload: dict) -> list[Posting]:
+    out = []
+    for job in (payload or {}).get("jobs") or [] if isinstance(payload, dict) else []:
+        job_id = str(job.get("id_icims") or job.get("id") or "").strip()
+        title = (job.get("title") or "").strip()
+        path = job.get("job_path") or ""
+        if not job_id or not title or not path:
+            continue
+        posted = None
+        found = _US_DATE.match((job.get("posted_date") or "").strip())
+        if found:
+            try:
+                posted = datetime.strptime(found.group(0), "%B %d, %Y").date().isoformat()
+            except ValueError:
+                posted = None
+        parts = [job.get("description"), "Basic qualifications\n" + (job.get("basic_qualifications") or ""),
+                 "Preferred qualifications\n" + (job.get("preferred_qualifications") or "")]
+        url = f"https://www.amazon.jobs{path}"
+        out.append(Posting(
+            ats="amazon", slug="amazon", job_id=job_id, title=title, company="Amazon",
+            url=url, apply_url=job.get("url_next_step") or url,
+            location=(job.get("normalized_location") or job.get("location") or "")[:200],
+            remote=True if "virtual" in (job.get("location") or "").lower() else None,
+            department=(job.get("job_category") or "")[:120],
+            description=html_to_text("<br>".join(p for p in parts if p and p.strip()))[:MAX_DESCRIPTION],
+            posted_at=posted,
+        ))
+    return out
+
+
+def parse_microsoft(payload: dict) -> list[Posting]:
+    data = (payload or {}).get("data") or {} if isinstance(payload, dict) else {}
+    out = []
+    for job in data.get("positions") or []:
+        job_id = str(job.get("id") or "").strip()
+        title = (job.get("name") or "").strip()
+        if not job_id or not title:
+            continue
+        mode = (job.get("workLocationOption") or "").lower()
+        url = f"{MICROSOFT_BASE}/careers/job/{job_id}"
+        out.append(Posting(
+            ats="microsoft", slug="microsoft", job_id=job_id, title=title, company="Microsoft",
+            url=url, apply_url=url,
+            location="; ".join(job.get("locations") or [])[:200],
+            remote=True if mode == "remote" else False if mode == "onsite" else None,
+            department=(job.get("department") or "")[:120],
+            posted_at=iso_day(job.get("postedTs")),
+            detail_ref=f"{MICROSOFT_BASE}/api/pcsx/position_details?domain=microsoft.com&position_id={job_id}",
+        ))
+    return out
+
+
+_GOOGLE_DATA = re.compile(r"AF_initDataCallback\(\{key: 'ds:1', hash: '\d+', data:(.*?), sideChannel: \{\}\}\);",
+                          re.S)
+
+
+def _google_html(value: object) -> str:
+    return value[1] if isinstance(value, list) and len(value) > 1 and isinstance(value[1], str) else ""
+
+
+def parse_google(page: str) -> tuple[list[Posting], int]:
+    """Google's results page embeds its data as positional arrays. Returns
+    (postings, total). Best-effort: an unexpected shape gives no postings."""
+    found = _GOOGLE_DATA.search(page or "")
+    if not found:
+        return [], 0
+    try:
+        data = json.loads(found.group(1))
+        jobs, total = data[0] or [], int(data[2] or 0) if len(data) > 2 else 0
+    except (ValueError, TypeError, IndexError):
+        return [], 0
+    out = []
+    for job in jobs:
+        try:
+            job_id, title = str(job[0]), (job[1] or "").strip()
+            places = [p[0] for p in job[9] or [] if isinstance(p, list) and p and isinstance(p[0], str)]
+            published = job[12][0] if isinstance(job[12], list) and job[12] else None
+        except (IndexError, TypeError):
+            continue
+        if not job_id or not title:
+            continue
+        text = "".join(_google_html(job[i]) for i in (10, 3, 4, 19) if len(job) > i)
+        url = f"{GOOGLE_RESULTS_URL}/{job_id}"
+        out.append(Posting(
+            ats="google", slug="google", job_id=job_id, title=title,
+            company=job[7] if len(job) > 7 and isinstance(job[7], str) else "Google",
+            url=url, apply_url=url, location="; ".join(places)[:200],
+            remote=True if any("remote" in p.lower() for p in places) else None,
+            description=html_to_text(text), posted_at=iso_day(published),
+        ))
+    return out, total
 
 
 async def fetch_board(client: httpx.AsyncClient, ats: str, slug: str,
@@ -525,7 +667,80 @@ async def fetch_board(client: httpx.AsyncClient, ats: str, slug: str,
                     seen.add(p.key)
                     out.append(p)
         return out
+    if ats == "amazon":
+        out, seen = [], set()
+        country = country_of(where)
+        for text in (search or [""])[:4]:
+            for page in range(AMAZON_MAX_PAGES):
+                params = {"base_query": text, "result_limit": AMAZON_PAGE, "offset": page * AMAZON_PAGE,
+                          "sort": "recent"}
+                if country:
+                    params["normalized_country_code[]"] = country
+                data = await _get(client, AMAZON_SEARCH_URL, params=params)
+                batch = parse_amazon(data)
+                _add_new(out, seen, batch)
+                if len(batch) < AMAZON_PAGE:
+                    break
+        return out
+    if ats == "microsoft":
+        out, seen = [], set()
+        country = country_of(where)
+        for text in (search or [""])[:4]:
+            for page in range(MICROSOFT_MAX_PAGES):
+                params = {"domain": "microsoft.com", "query": text, "start": page * MICROSOFT_PAGE}
+                if country:
+                    params["location"] = _COUNTRY_NAMES[country]
+                if out or page:
+                    await asyncio.sleep(0.5)  # it rate-limits bursts with HTTP 429
+                data = await _get(client, f"{MICROSOFT_BASE}/api/pcsx/search", params=params)
+                batch = parse_microsoft(data)
+                _add_new(out, seen, batch)
+                if len(batch) < MICROSOFT_PAGE:
+                    break
+        return out
+    if ats == "google":
+        out, seen = [], set()
+        country = country_of(where)
+        for text in (search or [""])[:4]:
+            for page in range(1, GOOGLE_MAX_PAGES + 1):
+                params = {"q": text, "page": page}
+                if country:
+                    params["location"] = _COUNTRY_NAMES[country]
+                meter.current().board_requests += 1
+                try:
+                    resp = await client.get(GOOGLE_RESULTS_URL, params=params, headers={"Accept": "text/html"})
+                except httpx.HTTPError as exc:
+                    raise BoardError(f"{GOOGLE_RESULTS_URL}: {exc}") from exc
+                if resp.status_code >= 400:
+                    raise BoardError(f"{GOOGLE_RESULTS_URL}: HTTP {resp.status_code}")
+                batch, total = parse_google(resp.text)
+                _add_new(out, seen, batch)
+                if len(batch) < GOOGLE_PAGE or page * GOOGLE_PAGE >= total:
+                    break
+        return out
     raise BoardError(f"Unknown ATS {ats!r}")
+
+
+def detail_url(key: str, url: str) -> str:
+    """Where a posting's own record lives, for the boards that have one: used
+    to fetch missing descriptions and to confirm a posting is still open."""
+    ats, slug, job_id = (key.split(":", 2) + ["", ""])[:3]
+    if ats == "workday":
+        try:
+            tenant, _host, site = workday_parts(slug)
+        except BoardError:
+            return ""
+        path = url.split(f"/{site}", 1)[-1] if f"/{site}" in url else ""
+        return f"{workday_base(slug)}/wday/cxs/{tenant}/{site}{path}" if path else ""
+    if ats == "smartrecruiters":
+        return f"https://api.smartrecruiters.com/v1/companies/{slug}/postings/{job_id}"
+    if ats == "microsoft":
+        return f"{MICROSOFT_BASE}/api/pcsx/position_details?domain=microsoft.com&position_id={job_id}"
+    if ats == "greenhouse":
+        return f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs/{job_id}"
+    if ats == "lever":
+        return f"https://api.lever.co/v0/postings/{slug}/{job_id}"
+    return ""
 
 
 async def fill_details(postings: list[Posting], limit: int = 40) -> int:
@@ -544,6 +759,8 @@ async def fill_details(postings: list[Posting], limit: int = 40) -> int:
                     return False
             if p.ats == "workday":
                 apply_workday_detail(p, data)
+            elif p.ats == "microsoft":
+                p.description = html_to_text(((data or {}).get("data") or {}).get("jobDescription"))
             else:
                 p.description = smartrecruiters_description(data)
                 if isinstance(data, dict) and data.get("active") is False:

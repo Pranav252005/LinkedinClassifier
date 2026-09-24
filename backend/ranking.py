@@ -35,7 +35,7 @@ from config import (
     TYPESAFE_API_KEY,
 )
 from filters import age_days
-from openrouter import OpenRouterError, chat, parse_json
+from openrouter import OpenRouterError, chat_json_list
 from schemas import Profile, ScoredOpening
 
 LEVEL_VALUE = {"fit": 1.0, "over": 0.5, "under": 0.25}
@@ -184,18 +184,14 @@ async def _review_batch(profile_text: str, resume: str, batch: list[ScoredOpenin
                         gate: asyncio.Semaphore) -> str | None:
     try:
         async with gate:
-            raw = await chat(
+            data = await chat_json_list(
                 [{"role": "system", "content": SYSTEM},
                  {"role": "user", "content": _prompt(profile_text, resume, batch)}],
                 model=OPENROUTER_SCORING_MODEL, max_tokens=260 * len(batch) + 200, temperature=0.0,
+                thinking="medium",
             )
-        data = parse_json(raw)
     except OpenRouterError as exc:
         return str(exc)
-    if isinstance(data, dict):
-        data = next((v for v in data.values() if isinstance(v, list)), None)
-    if not isinstance(data, list):
-        return "The review model did not return a JSON array."
 
     by_index: dict[int, object] = {}
     for position, entry in enumerate(data):

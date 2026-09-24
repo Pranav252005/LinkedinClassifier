@@ -231,10 +231,15 @@ Before taking real money:
 - Signup, login and runs are rate limited per IP (see above). Email verification would
   be the next step up if abuse continues.
 
-## Two modes
+## Three modes
 
 **People** finds humans to ask for a referral. **Openings** finds the postings
 themselves — and, from any posting, the people around that specific role.
+**Freelance gigs** (`backend/gigs.py`) finds recent Upwork projects matching the
+resume's skills, one search per skill or role, drops any posted more than 21 days
+ago, and ranks them like openings. Upwork's API needs an approved developer
+application, so gigs come from indexed gig pages; Upwork blocks automated visits,
+so every gig is marked "not confirmed open".
 
 ### How openings are found and ranked
 
@@ -245,11 +250,12 @@ the job boards' own public JSON instead:
 | Stage | File | What it does |
 | --- | --- | --- |
 | **Profile** | `backend/seeker.py` | The resume is read once into fields — target roles, level, years, skills, locations, remote, sponsorship, college — shown as editable chips before the run. |
-| **Resolve** | `backend/registry.py` | Each company → its board. Guesses the board name against every ATS API first (free), then one Serper search as a last resort. Found boards are cached in `company_boards`, and misses are cached for 14 days. |
-| **Read** | `backend/boards.py` | Every open posting on Greenhouse, Lever, Ashby, Workable, SmartRecruiters, Recruitee and (unofficial, best-effort, searched per role) Workday — full description, location, department, real dates. Keyed `(ats, board, job_id)`, so duplicates collapse. |
-| **Fallback** | `backend/openings.py` | Companies with no readable board (in-house portals) fall back to web search; every such link is fetched and dropped if dead or closed. Marked "web result" in the UI. |
+| **Resolve** | `backend/registry.py` | Each company → its board. Guesses the board name against every ATS API first (free), then one Serper search as a last resort. A board is only accepted if its own name matches the company ("philips" is never Flipkart's), including boards cached before that check existed. Found boards are cached in `company_boards`, and misses are cached for 14 days. |
+| **Read** | `backend/boards.py` | Every open posting on Greenhouse, Lever, Ashby, Workable, SmartRecruiters, Recruitee and (unofficial, best-effort, searched per role) Workday, plus the in-house careers sites of IBM, Amazon, Microsoft and Google — full description, location, department, real dates. Keyed `(ats, board, job_id)`, so duplicates collapse. |
+| **Fallback** | `backend/openings.py` | Companies with no readable board (in-house portals) fall back to web search; every such link is fetched and dropped if dead or closed. When the boards leave the list short of openings in the roles wanted, postings from any company in the seeker's city are added from LinkedIn, Naukri (India only), Indeed and Glassdoor (their country editions), liveness-checked the same way. Indeed and Glassdoor refuse automated visits, so their links are kept but marked "not confirmed open" rather than live. None of these sites has a public jobs API; results come from the pages search engines have indexed. |
 | **Filter** | `backend/filters.py` | Plain-code rules: level from the title, required years from the description, location, sponsorship, age. Nothing when a posting doesn't say. Every drop is counted by reason and shown ("1695 not internships; 13 outside your locations"). |
 | **Rank** | `backend/embeddings.py`, `backend/ranking.py` | Embeddings rank everything left (title and description blended). The top 20 go to the model **with the full description**, which answers narrow questions: must-haves met, level fit (under/fit/over), skills matched, skills missing. |
+| **Check** | `backend/verify.py` | Every lead about to be shown is confirmed still open — through the board's own record of the posting where it has one (Greenhouse, Lever, SmartRecruiters, Workday, Microsoft), else by opening the page and looking for a 404, a bounce to the careers index, an expired `validThrough`, or "no longer accepting applications". Closed ones are dropped and closed in the index. Then a model reads the full posting for work mode, city and pay. |
 
 Each card shows why it ranked where it did: *Matches: Python, Go · Missing:
 Kubernetes · Level: fits*. A "quick match" badge means similarity only.
@@ -361,8 +367,10 @@ and any Stripe event. Those accounts are never shown an upgrade button.
 - Alerts are in-app only; there is no email or push delivery yet.
 - Workday boards are searched per role during runs but skipped by the daily poll (a
   tenant can hold tens of thousands of postings), so they get no closing dates.
-- Companies on in-house careers portals (common in India) have no board to read; they
-  fall back to web search, liveness-checked, snippet-only and undated.
+- Companies on in-house careers portals (common in India) other than IBM, Amazon,
+  Microsoft and Google have no board to read; they fall back to web search,
+  liveness-checked, snippet-only and undated. Google's careers data is read from its
+  results page rather than an API, so a redesign there silently yields nothing.
 - Hiring-cycle notes need 90+ days of polling before they say anything.
 - No password reset flow.
 - Search quality depends entirely on what's publicly indexed; smaller and newer companies

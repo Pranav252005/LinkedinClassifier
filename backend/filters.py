@@ -19,8 +19,10 @@ from datetime import date, datetime, timedelta, timezone
 from schemas import Profile
 
 # --- level from the title ------------------------------------------------------
-_INTERN = re.compile(r"\b(intern|interns|internship|co-?op|apprentice(ship)?|summer\s+analyst|"
-                     r"working\s+student|stagiaire|praktikant)\b", re.I)
+_INTERN = re.compile(r"\b(intern|interns|internship|internships|co-?op|apprentice(ship)?|summer\s+analyst|"
+                     r"working\s+student|student\s+(researcher|developer|engineer|analyst|associate|trainee)|"
+                     r"industrial\s+(training|trainee)|summer\s+(20\d\d|associate|analyst|engineer)|"
+                     r"fellowship|thesis|stagiaire|praktikant|werkstudent)\b", re.I)
 _ENTRY = re.compile(r"\b(new\s*grad(uate)?|graduate|grad\b|university\s+grad|entry[\s-]*level|early[\s-]*career|"
                     r"campus|fresher|junior|jr\.?|associate\s+(software|engineer|developer|data)|"
                     r"(sde|swe|engineer|developer)\s*[-\s]?(1|i)\b|level\s*1\b|l[1-3]\b)", re.I)
@@ -266,7 +268,7 @@ REASONS = {
     "not_remote": "not remote",
     "remote_only": "remote, not on-site",
     "old": "posted too long ago",
-    "closed": "closed on the board",
+    "closed": "closed or expired",
 }
 
 
@@ -318,6 +320,10 @@ def judge(posting, profile: Profile, max_age_days: int = 30, include_older: bool
         pay = posting.pay or pay_status(f"{posting.title}\n{posting.description}")
         if pay == "unpaid":
             return Verdict(False, "unpaid")
+
+    overdue = age_days(getattr(posting, "closes_at", None), today)   # days past the deadline
+    if overdue is not None and overdue > 0:
+        return Verdict(False, "closed")
 
     if not include_older:
         age = age_days(posting.posted_at, today)

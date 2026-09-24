@@ -25,6 +25,7 @@ import db
 import embeddings
 import filters
 import meter
+import gigs as gigs_pipeline
 import openings as openings_pipeline
 import outreach
 import people
@@ -530,6 +531,45 @@ async def _run_openings(req: SearchRequest, user: sqlite3.Row) -> OpeningsRespon
                             runs_used=used + 1, run_id=run_id, **common)
 
 
+async def _run_gigs(req: SearchRequest, user: sqlite3.Row) -> OpeningsResponse:
+    """Freelance gigs (Upwork) that fit the seeker's skills, ranked like openings."""
+    used, allowed = _check_quota(user)
+    meter.start()
+    warnings: list[str] = []
+    max_results = _cap_results(user, req.max_candidates)
+    profile, profile_warnings = await _resolve_profile(req.profile, req.resume, user["id"])
+    warnings += profile_warnings
+
+    already = _already_seen(user["id"], "gig", req.fresh_only)
+    try:
+        found, queries, skipped, stale = await gigs_pipeline.find(profile, req.titles, already, max_results)
+    except SearchError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    warnings += _freshness_note(skipped, "gigs", req.fresh_only)
+    if stale:
+        warnings.append(f"Skipped {stale} gig(s) posted more than {gigs_pipeline.MAX_AGE_DAYS} days ago; "
+                        "they are usually awarded by then.")
+    plan = SearchPlan(titles=gigs_pipeline.terms(profile, req.titles),
+                      summary="Upwork gigs matching your skills. Upwork blocks automated checks, so open "
+                              "each gig to confirm it is still accepting proposals.")
+    common = dict(plan=plan, queries_run=queries, runs_allowed=allowed, profile=profile)
+
+    if not found:
+        run_id = _finish_run(user, "gig", "upwork", [])
+        return OpeningsResponse(count=0, results=[], runs_used=used + 1, run_id=run_id,
+                                warnings=warnings + [_nothing_new_note(skipped, "gigs")], **common)
+
+    ranked, rank_warnings = await openings_pipeline.rank(found, profile, req.resume)
+    warnings += rank_warnings
+    results = ranked[:max_results]
+    rows = [(o.key, i, o.fit_score, json.dumps(o.features), o.url, o.title) for i, o in enumerate(results)]
+    run_id = _finish_run(user, "gig", "upwork", rows)
+    _remember(user["id"], "gig", [o.key for o in results])
+    _attach_feedback(user["id"], "gig", results, lambda o: o.key)
+    return OpeningsResponse(count=len(results), results=results, warnings=warnings,
+                            runs_used=used + 1, run_id=run_id, **common)
+
+
 def _empty_openings_note(got: dict, profile) -> str:
     """Why nothing came back: too little found, all shown before, or all filtered."""
     pool, dropped = got["pool_size"], got["dropped"]
@@ -677,7 +717,7 @@ async def start_run(
 
     async def work() -> None:
         try:
-            run = _run_openings if req.mode == "jobs" else _run_pipeline
+            run = {"jobs": _run_openings, "gigs": _run_gigs}.get(req.mode, _run_pipeline)
             job["result"] = (await run(req, user)).model_dump(mode="json")
             job["status"] = "done"
         except HTTPException as exc:

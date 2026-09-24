@@ -104,6 +104,7 @@ async def draft(kind: str, target: dict, resume: str, role_target: str = "") -> 
     raw = await chat(
         [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
         max_tokens=1100,
+        thinking="low",
         temperature=0.6,
     )
 

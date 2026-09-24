@@ -75,6 +75,24 @@ def names_match(wanted: str, reported: str) -> bool:
     return bool(a and b) and (a == b or a in b or b in a)
 
 
+def slug_matches(company: str, slug: str) -> bool:
+    """Whether a board's name could be this company's: "razorpaysoftwareprivatelimited"
+    is Razorpay's, "zomato1" is Zomato's; "philips" is not Flipkart's.
+
+    Search results mention companies in passing (a Philips posting that names
+    Flipkart as a partner), so a board is only ever taken on its own name.
+    Workday boards are named after the tenant, the first part of the slug.
+    """
+    a = _norm(company)
+    b = _norm(slug.split("|")[0]).rstrip("0123456789")
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    # A prefix either way, but not a short fragment: "ola" must not claim "olasolar".
+    return (b.startswith(a) and len(a) >= 5) or (a.startswith(b) and len(b) >= 5)
+
+
 def board_from_url(url: str) -> tuple[str, str] | None:
     """The (ats, slug) a posting URL lives on, or None if it is not an ATS board."""
     match = _WORKDAY_URL.match(url or "")
@@ -166,8 +184,7 @@ async def _search(company: str) -> tuple[str, str] | None:
     votes: dict[tuple[str, str], int] = {}
     for item in organic:
         board = board_from_url(item.get("link") or "")
-        text = f"{item.get('title', '')} {item.get('snippet', '')} {item.get('link', '')}"
-        if board and (names_match(company, board[1].split("|")[0]) or _norm(company) in _norm(text)):
+        if board and slug_matches(company, board[1]):
             votes[board] = votes.get(board, 0) + 1
     if not votes:
         return None
@@ -184,6 +201,9 @@ async def _confirm(company: str, ats: str, slug: str) -> bool:
         postings = await _probe(client, ats, slug)
     if not postings:
         return False
+    reported = next((p.company for p in postings if p.company), "")
+    if reported and not names_match(company, reported):
+        return False
     for p in postings:
         p.company = p.company or company
     try:
@@ -194,7 +214,14 @@ async def _confirm(company: str, ats: str, slug: str) -> bool:
 
 
 # Companies whose own careers site has an adapter of its own (boards.py).
-KNOWN = {"ibm": ("ibm", "ibm")}
+# Keyed by _norm(name); a hosted-ATS guess for these finds somebody else's board.
+KNOWN = {
+    "ibm": ("ibm", "ibm"),
+    "amazon": ("amazon", "amazon"), "aws": ("amazon", "amazon"), "amazonwebservices": ("amazon", "amazon"),
+    "microsoft": ("microsoft", "microsoft"),
+    "google": ("google", "google"), "alphabet": ("google", "google"), "googledeepmind": ("google", "google"),
+    "deepmind": ("google", "google"),
+}
 
 
 async def resolve(company: str, allow_search: bool = True) -> tuple[str, str] | None:
@@ -209,9 +236,12 @@ async def resolve(company: str, allow_search: bool = True) -> tuple[str, str] | 
         row = db.get_board(company)
     except Exception:
         row = None
-    if row is not None:
-        if row["ats"]:
+    if row is not None and row["ats"]:
+        # Boards cached before names were checked can belong to someone else;
+        # those fall through and are looked up again.
+        if slug_matches(company, row["slug"]):
             return row["ats"], row["slug"]
+    elif row is not None:
         checked = datetime.fromisoformat(row["checked_at"])
         if _now() - checked < timedelta(days=MISS_TTL_DAYS):
             return None

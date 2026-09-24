@@ -142,6 +142,7 @@ async def plan_search(
                 {"role": "user", "content": _prompt(resume, companies, titles, role, for_jobs, profile_text)},
             ],
             max_tokens=900,
+            thinking="high",           # the search plan decides everything downstream
         )
         data = parse_json(raw)
     except OpenRouterError as exc:

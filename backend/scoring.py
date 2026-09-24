@@ -145,6 +145,7 @@ async def _score_batch(
                 ],
                 model=OPENROUTER_SCORING_MODEL,
                 max_tokens=180 * len(batch) + 300,
+                thinking="low",
                 temperature=0.0,
             )
         data = parse_json(raw)

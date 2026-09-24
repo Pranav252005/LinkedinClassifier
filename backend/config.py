@@ -38,9 +38,9 @@ TYPESAFE_BASE_URL = _env("TYPESAFE_BASE_URL", "https://api.typesafe.ai").rstrip(
 OPENROUTER_API_KEY = _env("OPENROUTER_API_KEY")
 OPENROUTER_BASE_URL = _env("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
 # Cheap, fast, strong-enough models. Override in .env if OpenRouter renames them.
-OPENROUTER_TEXT_MODEL = _env("OPENROUTER_TEXT_MODEL", "google/gemini-2.5-flash")
+OPENROUTER_TEXT_MODEL = _env("OPENROUTER_TEXT_MODEL", "google/gemini-3.8-flash")
 OPENROUTER_VISION_MODEL = _env("OPENROUTER_VISION_MODEL", "google/gemini-2.5-flash")
-OPENROUTER_SCORING_MODEL = _env("OPENROUTER_SCORING_MODEL", "google/gemini-2.5-flash")
+OPENROUTER_SCORING_MODEL = _env("OPENROUTER_SCORING_MODEL", "google/gemini-3.8-flash")
 
 # Which backend scores candidates. "openrouter" runs on your OpenRouter credits;
 # "typesafe" calls Jev's System One endpoint and needs TYPESAFE_API_KEY.

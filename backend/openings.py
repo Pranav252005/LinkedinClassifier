@@ -30,6 +30,7 @@ import ranking
 import registry
 import seeker
 import timing
+import verify
 from config import BOARD_FRESH_HOURS, MAX_BOARDS_PER_RUN, SERPER_API_KEY
 from jobs import find_openings as search_web_openings
 from openrouter import OpenRouterError
@@ -43,6 +44,7 @@ DETAIL_POOL = 60          # most descriptions fetched one-by-one (SmartRecruiter
 MIN_LEADS = 5             # fewer survivors than this and the search widens itself
 DISCOVERY_QUERIES = 8     # web searches used to discover boards when no company is named
 LIVENESS_TIMEOUT = 8.0
+OPEN_SEARCH_ROLES = 3     # LinkedIn and Naukri searches when the list is short, one per role
 
 
 def _fresh(last_polled: str | None) -> bool:
@@ -123,6 +125,15 @@ def search_roles(roles: list[str], profile: Profile) -> list[str]:
         r if filters.title_level(r) == "intern" else f"{r} intern" for r in roles))
 
 
+def board_searches(wanted: list[str], profile: Profile) -> list[str]:
+    """Search text for boards read by search (Workday, IBM, Amazon, Microsoft,
+    Google). Only the first few are used, and "Data Scientist intern" finds
+    nothing on a site whose internship is titled "Data Science INTERN", so an
+    internship seeker's list starts with the plain word: ranking sorts out
+    which of a company's internships fit."""
+    return ["intern", *wanted] if intern_only(profile) else wanted
+
+
 def board_places(profile: Profile) -> list[str]:
     """Place names to narrow searched boards by, aliases included ("Bangalore"
     also finds "Bengaluru"). None for a remote-only seeker or no locations."""
@@ -198,6 +209,11 @@ async def _discover_boards(roles: list[str], where: str = "", max_queries: int =
         if not board or not o.company:
             continue
         out.setdefault(o.company, board)
+        # Read it either way (the postings name their own employer where the
+        # ATS allows), but only remember it as this company's board if the
+        # names agree: a mislabel here would be served to every later run.
+        if not registry.slug_matches(o.company, board[1]):
+            continue
         try:
             if not db.get_board(o.company):
                 db.save_board(o.company, board[0], board[1], "search")
@@ -206,21 +222,37 @@ async def _discover_boards(roles: list[str], where: str = "", max_queries: int =
     return out
 
 
-async def _alive(client: httpx.AsyncClient, url: str) -> bool:
+async def _alive(client: httpx.AsyncClient, url: str) -> bool | None:
+    """True: the page is up and open. False: dead or closed. None: the site
+    refused the visit (a bot wall), which says nothing either way."""
     try:
         resp = await client.get(url)
     except httpx.HTTPError:
         return False
-    if resp.status_code >= 400:
+    if verify.page_closed(url, resp):
         return False
-    # Boards bounce a closed posting to the careers index or a "no longer
-    # available" page; the posting id vanishing from the final URL is the tell.
-    final = str(resp.url).rstrip("/")
-    if final.count("/") < url.rstrip("/").count("/") - 1:
-        return False
-    body = resp.text[:20000].lower()
-    return not any(p in body for p in ("no longer accepting", "no longer available", "position has been filled",
-                                       "job you are looking for", "job not found", "posting has expired"))
+    return True if resp.status_code < 400 else None
+
+
+async def _live_only(found: list) -> tuple[list[ScoredOpening], int]:
+    """Web results whose link still opens onto the posting, as openings, plus
+    those whose site would not let the check in (marked unconfirmed).
+    Returns (openings, dead count)."""
+    gate = asyncio.Semaphore(8)
+    async with httpx.AsyncClient(timeout=LIVENESS_TIMEOUT, follow_redirects=True,
+                                 headers={"User-Agent": verify.BROWSER_AGENT}) as client:
+        async def check(o):
+            async with gate:
+                return await _alive(client, o.url)
+        alive = await asyncio.gather(*(check(o) for o in found))
+
+    out = [ScoredOpening(**{**o.model_dump(), "key": o.key or o.url, "verified": False,
+                            "unconfirmed": ok is None, "description": o.snippet,
+                            "level": filters.title_level(o.title),
+                            "pay": filters.pay_status(f"{o.title}\n{o.snippet}"),
+                            "work_mode": filters.work_mode(o.location, o.snippet, o.remote)})
+           for o, ok in zip(found, alive) if ok is not False]
+    return out, len(found) - len(out)
 
 
 async def _web_fallback(companies: list[str], roles: list[str], exclude: frozenset[str],
@@ -234,20 +266,7 @@ async def _web_fallback(companies: list[str], roles: list[str], exclude: frozens
     except SearchError as exc:
         return [], [], [f"Web search for companies without a readable board failed: {exc}"]
 
-    gate = asyncio.Semaphore(8)
-    async with httpx.AsyncClient(timeout=LIVENESS_TIMEOUT, follow_redirects=True,
-                                 headers={"User-Agent": boards.USER_AGENT}) as client:
-        async def check(o):
-            async with gate:
-                return await _alive(client, o.url)
-        alive = await asyncio.gather(*(check(o) for o in found))
-
-    out = [ScoredOpening(**{**o.model_dump(), "key": o.key or o.url, "verified": False,
-                            "level": filters.title_level(o.title),
-                            "pay": filters.pay_status(f"{o.title}\n{o.snippet}"),
-                            "work_mode": filters.work_mode(o.location, o.snippet, o.remote)})
-           for o, ok in zip(found, alive) if ok]
-    dead = len(found) - len(out)
+    out, dead = await _live_only(found)
     notes = []
     if out:
         notes.append(f"{len(out)} result(s) for {', '.join(companies[:4])}"
@@ -256,6 +275,37 @@ async def _web_fallback(companies: list[str], roles: list[str], exclude: frozens
     if dead:
         notes.append(f"Dropped {dead} web result(s) whose link was dead or closed.")
     return out, queries, notes
+
+
+async def _open_search(roles: list[str], where: str, country: str | None, exclude: frozenset[str],
+                       limit: int) -> tuple[list[ScoredOpening], list[str], int]:
+    """Any company hiring for these roles, from the job sites. Used when the
+    named companies and discovered boards leave the list short: most employers,
+    especially smaller ones, post only there. Search engines keep closed
+    postings indexed for months, so only live links are kept (or, where a site
+    refuses the check, kept and marked unconfirmed).
+    Returns (openings, queries, dead count)."""
+    if not SERPER_API_KEY:
+        return [], [], 0
+    # LinkedIn everywhere; Naukri is India's largest; one query each on Indeed
+    # and Glassdoor, whose links cannot be confirmed and so rank lower anyway.
+    plan = [("linkedin", OPEN_SEARCH_ROLES), ("indeed", 1), ("glassdoor", 1)]
+    if country in (None, "IND"):
+        plan.insert(1, ("naukri", OPEN_SEARCH_ROLES))
+
+    async def one(source: str, n: int):
+        try:
+            return await search_web_openings(roles[:n], [], 10, limit, exclude, max_queries=n,
+                                             sources=(source,), where=where, country=country)
+        except SearchError:
+            return [], [], 0
+
+    found, queries = [], []
+    for got, ran, _ in await asyncio.gather(*(one(src, n) for src, n in plan)):
+        found += got
+        queries += ran
+    out, dead = await _live_only(found)
+    return out, queries, dead
 
 
 async def gather(profile: Profile, roles: list[str], companies: list[str], exclude: frozenset[str],
@@ -278,7 +328,8 @@ async def gather(profile: Profile, roles: list[str], companies: list[str], exclu
         company_boards.setdefault(company, board)
     queries.append(f"discovery: {', '.join(wanted[:2])}{f' in {where}' if where else ''} across ATS boards")
 
-    board_openings, board_names, read_warnings = await _read_boards(company_boards, wanted, board_places(profile))
+    board_openings, board_names, read_warnings = await _read_boards(
+        company_boards, board_searches(wanted, profile), board_places(profile))
     warnings += read_warnings
 
     # The shared index: matching postings on boards other users (or the poller) already read.
@@ -300,9 +351,9 @@ async def gather(profile: Profile, roles: list[str], companies: list[str], exclu
     pool: list[ScoredOpening] = []
     shown: list[ScoredOpening] = []
     for o in board_openings + web:
-        if o.key in seen:
+        if o.key in seen or o.url in seen:
             continue
-        seen.add(o.key)
+        seen.update((o.key, o.url))
         if o.key in exclude or o.url in exclude:
             o.seen_before = True
             shown.append(o)
@@ -311,6 +362,29 @@ async def gather(profile: Profile, roles: list[str], companies: list[str], exclu
     skipped = len(shown)
 
     kept, dropped = filters.apply(pool, profile, max_age_days, include_older)
+
+    # Short of a full page of openings in the roles wanted (a company's seven
+    # finance internships do not count for a data science student): look beyond
+    # the named companies before reaching for anything already shown or older.
+    on_target = sum(1 for o in kept if keyword_score(o.title, terms) > 0)
+    if on_target < max_results:
+        found, open_queries, dead = await _open_search(wanted, where, boards.country_of(board_places(profile)),
+                                                       exclude | seen, 3 * max_results)
+        queries += open_queries
+        found = [o for o in found if o.key not in seen]
+        more, more_dropped = filters.apply(found, profile, max_age_days, include_older)
+        pool += found
+        kept += more
+        for k, v in more_dropped.items():
+            dropped[k] = dropped.get(k, 0) + v
+        if more:
+            warnings.append(f"Company boards had few matching openings, so the search also looked at "
+                            f"any company hiring{f' in {where}' if where else ''}: {len(more)} more from "
+                            "LinkedIn, Naukri, Indeed and Glassdoor. Each link was opened to check it is "
+                            "still open; Indeed and Glassdoor block that check, so theirs say \u201cnot confirmed\u201d.")
+        if dead:
+            warnings.append(f"Skipped {dead} job-site posting(s) that are closed or no longer accepting "
+                            "applications.")
 
     # Too few left: widen before giving up, and say how. Openings already shown
     # come back marked, then older ones; an empty page helps nobody.
@@ -335,7 +409,10 @@ async def gather(profile: Profile, roles: list[str], companies: list[str], exclu
     detail_less = [o for o in kept if o.source in boards.DETAIL_ATS and not o.description]
     if detail_less:
         detail_less.sort(key=lambda o: -keyword_score(o.title, roles + profile.skills))
-        await _fill_descriptions(detail_less[:DETAIL_POOL])
+        closed = await _fill_descriptions(detail_less[:DETAIL_POOL])
+        if closed:
+            kept = [o for o in kept if o.key not in closed]
+            dropped["closed"] = dropped.get("closed", 0) + len(closed)
         kept, dropped_after = filters.apply(kept, profile, max_age_days, include_older)
         for k, v in dropped_after.items():
             dropped[k] = dropped.get(k, 0) + v
@@ -357,22 +434,15 @@ def _levels(openings: list[ScoredOpening]) -> dict[str, int]:
     return out
 
 
-async def _fill_descriptions(openings: list[ScoredOpening]) -> None:
+async def _fill_descriptions(openings: list[ScoredOpening]) -> set[str]:
+    """Fetch descriptions in place. Returns the keys of postings found closed."""
     postings = []
     for o in openings:
         ats, slug, job_id = o.key.split(":", 2)
-        tenant_path = ""
-        if ats == "workday":
-            # Rebuild the detail URL from the public posting URL.
-            tenant, host, site = boards.workday_parts(slug)
-            path = o.url.split(f"/{site}", 1)[-1] if f"/{site}" in o.url else ""
-            tenant_path = f"{boards.workday_base(slug)}/wday/cxs/{tenant}/{site}{path}"
-        else:
-            tenant_path = f"https://api.smartrecruiters.com/v1/companies/{slug}/postings/{job_id}"
         postings.append(boards.Posting(ats=ats, slug=slug, job_id=job_id, title=o.title,
-                                       url=o.url, detail_ref=tenant_path))
+                                       url=o.url, detail_ref=boards.detail_url(o.key, o.url)))
     await boards.fill_details(postings, limit=len(postings))
-    closed = 0
+    closed: set[str] = set()
     for o, p in zip(openings, postings):
         if p.description:
             o.description = p.description
@@ -383,15 +453,16 @@ async def _fill_descriptions(openings: list[ScoredOpening]) -> None:
             if p.posted_at and not p.posted_approx:
                 o.posted_at = p.posted_at
         if p.extra.get("closed"):
-            closed += 1
+            closed.add(o.key)
             try:
                 db.close_posting(o.key)
             except Exception:
                 pass
     try:
-        db.upsert_postings([p for p in postings if p.description])
+        db.upsert_postings([p for p in postings if p.description and p.key not in closed])
     except Exception:
         pass
+    return closed
 
 
 async def rank(openings: list[ScoredOpening], profile: Profile, resume: str

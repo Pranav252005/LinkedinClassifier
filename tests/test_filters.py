@@ -161,3 +161,19 @@ def test_work_mode_filter():
     assert j(_o("Software Engineer", location="Mumbai"), onsite).reason == "location"
     # Not stated either way: kept for the verify stage to read.
     assert j(_o("Software Engineer"), remote).keep
+
+
+@pytest.mark.parametrize("title", ["Student Researcher, 2027", "Summer 2027 Software Engineer",
+                                   "Industrial Training - Data Science", "AI Research Fellowship",
+                                   "Data Science INTERN"])
+def test_more_internship_titles(title):
+    assert filters.title_level(title) == "intern"
+
+
+def test_past_deadline_is_closed():
+    student = Profile(seniority="intern", job_types=["internship"])
+    past = _o("Software Engineer Intern", posted="2026-09-01")
+    past.closes_at = "2026-09-20"
+    assert filters.judge(past, student, today=TODAY).reason == "closed"
+    past.closes_at = "2026-09-23"                   # closes today: still open
+    assert filters.judge(past, student, today=TODAY).keep

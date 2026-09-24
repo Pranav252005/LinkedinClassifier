@@ -136,7 +136,7 @@ async def extract(resume: str) -> tuple[Profile, list[str]]:
         raw = await chat(
             [{"role": "system", "content": SYSTEM},
              {"role": "user", "content": PROMPT.format(today=today, resume=resume.strip()[:9000])}],
-            max_tokens=900, temperature=0.0,
+            max_tokens=900, temperature=0.0, thinking="medium",
         )
         return coerce(parse_json(raw)), []
     except OpenRouterError as exc:

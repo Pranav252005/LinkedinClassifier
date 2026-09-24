@@ -40,13 +40,23 @@ def _headers() -> dict[str, str]:
     }
 
 
+# Thinking budgets, in tokens. Thinking counts against max_tokens, so each
+# budget is added on top of the answer's allowance rather than taken from it.
+THINKING = {"low": 512, "medium": 2048, "high": 6144}
+
+
 async def chat(
     messages: list[dict[str, Any]],
     model: str | None = None,
     max_tokens: int = 1500,
     temperature: float = 0.2,
+    thinking: str | None = None,
 ) -> str:
-    """Run a chat completion and return the assistant's text."""
+    """Run a chat completion and return the assistant's text.
+
+    `thinking` (low | medium | high) lets a reasoning model think first, within
+    that budget; None leaves it to the model's default.
+    """
     payload = {
         "model": model or OPENROUTER_TEXT_MODEL,
         "messages": messages,
@@ -55,6 +65,9 @@ async def chat(
         # Ask OpenRouter to report what the call cost, so runs can be priced.
         "usage": {"include": True},
     }
+    if thinking in THINKING:
+        payload["reasoning"] = {"max_tokens": THINKING[thinking], "exclude": True}
+        payload["max_tokens"] = max_tokens + THINKING[thinking]
     try:
         async with httpx.AsyncClient(timeout=90.0) as client:
             resp = await client.post(
@@ -99,6 +112,25 @@ def parse_json(text: str) -> Any:
             except ValueError:
                 continue
     raise OpenRouterError("Model did not return usable JSON.")
+
+
+async def chat_json_list(messages: list[dict[str, Any]], attempts: int = 2, **kw: Any) -> list:
+    """A chat call whose answer must be a JSON array (or an object wrapping one).
+    Models occasionally return malformed JSON; one retry fixes nearly all of it."""
+    last = "The model did not return a JSON array."
+    for _ in range(attempts):
+        try:
+            data = parse_json(await chat(messages, **kw))
+        except OpenRouterError as exc:
+            if "JSON" not in str(exc):
+                raise                      # a key, credit or network problem: retrying will not help
+            last = str(exc)
+            continue
+        if isinstance(data, dict):
+            data = next((v for v in data.values() if isinstance(v, list)), None)
+        if isinstance(data, list):
+            return data
+    raise OpenRouterError(last)
 
 
 async def read_image(data_url: str, instruction: str) -> str:
